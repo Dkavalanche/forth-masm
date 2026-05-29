@@ -1,0 +1,28 @@
+# Build artifacts
+build/
+*.obj
+*.exe
+*.ilk
+*.pdb
+*.lib
+*.exp
+*.lst
+*.map
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.vcxproj.user
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+
+# OS files
+Thumbs.db
+Desktop.ini
+
+# Backups
+backup/*.zip
