@@ -1,41 +1,43 @@
 ; =========================================================
-; Proyecto: Int√©rprete Forth para Windows x86 (32 bits) en MASM
-; Archivo : forth_while_repeat.asm
-; Estado  : versi√≥n funcional de trabajo
+; Proyecto: IntÈrprete Forth para Windows x86 (32 bits) en MASM
+; Archivo : forth_exit.asm
+; Estado  : versiÛn funcional de trabajo
 ;
 ; Incluye:
-;   - Consola interactiva y parser por tokens
-;   - Normalizaci√≥n del input a min√∫sculas
-;   - Diccionario est√°tico y definiciones din√°micas con : y ;
-;   - Stack de datos y literales compilados mediante lit
-;   - Aritm√©tica: + - * /
+;   - Consola interactiva
+;   - Parser por tokens
+;   - NormalizaciÛn del input a min˙sculas
+;   - Diccionario est·tico
+;   - Definiciones din·micas con : y ;
+;   - Stack de datos
+;   - Soporte de literales compilados: lit
+;   - Operaciones aritmÈticas: + - * /
 ;   - Comparaciones: = < > 0= 0< 0>
-;   - Stack: dup drop swap over depth
+;   - Palabras de stack: dup drop swap over depth
 ;   - Utilidades: . .s clear words quit
-;   - Memoria: constant variable @ !
+;   - Memoria b·sica: constant variable @ !
 ;   - Saltos internos: 0branch branch
-;   - Condicionales: if else then
-;   - Ciclos: begin until again while repeat
+;   - Control condicional: if else then
+;   - Ciclos: begin until again
 ;   - Salida anticipada de palabras compiladas: exit
 ;
 ; Cambios recientes:
-;   - Agregadas las palabras de compilaci√≥n while y repeat
-;   - while compila un salto condicional de salida pendiente
-;   - repeat compila el salto hacia begin y resuelve la salida
-;   - Se conserva la correcci√≥n del enlace de constant y variable
+;   - Agregada la palabra exit
+;   - exit permite finalizar inmediatamente una palabra compilada
+;   - exit puede utilizarse dentro de if, begin y again
+;   - Corregido el enlace de palabras din·micas constant y variable
 ;
 ; Notas:
-;   - Las palabras de control se ejecutan durante la compilaci√≥n
+;   - Las palabras definidas por el usuario utilizan threaded code
 ;   - Las direcciones de salto compiladas son absolutas
-;   - while debe utilizarse despu√©s de begin
-;   - repeat debe cerrar la estructura begin ... while ... repeat
-;   - again crea un ciclo infinito salvo que se use exit
+;   - if, else, then, begin, until y again se ejecutan durante compilaciÛn
+;   - 0branch consume un flag del stack de datos
+;   - again genera un ciclo infinito si no se combina con una salida
+;   - La implementaciÛn actual est· orientada a Windows x86 de 32 bits
 ;
-; Pr√≥xima etapa prevista:
-;   - Mejorar la validaci√≥n de estructuras de control incompletas
-;   - Agregar m√°s palabras de stack o un return stack
+; PrÛxima etapa prevista:
+;   - Implementar while y repeat
 ; =========================================================
-
 .386
 .model flat, stdcall
 option casemap:none
@@ -82,8 +84,6 @@ do_then          PROTO
 do_begin         PROTO
 do_until         PROTO
 do_again         PROTO
-do_while         PROTO
-do_repeat        PROTO
 do_exit          PROTO
 do_quit          PROTO
 
@@ -318,18 +318,8 @@ word_again_link dd OFFSET word_until_link
 word_again_name dd OFFSET name_again
 word_again_code dd OFFSET do_again
 
-name_while      db "while",0
-word_while_link dd OFFSET word_again_link
-word_while_name dd OFFSET name_while
-word_while_code dd OFFSET do_while
-
-name_repeat      db "repeat",0
-word_repeat_link dd OFFSET word_while_link
-word_repeat_name dd OFFSET name_repeat
-word_repeat_code dd OFFSET do_repeat
-
 name_exit       db "exit",0
-word_exit_link  dd OFFSET word_repeat_link
+word_exit_link  dd OFFSET word_again_link
 word_exit_name  dd OFFSET name_exit
 word_exit_code  dd OFFSET do_exit
 
@@ -443,12 +433,6 @@ compile_known_word:
     je compile_exec_word
 
     cmp eax, OFFSET word_again_link
-    je compile_exec_word
-
-    cmp eax, OFFSET word_while_link
-    je compile_exec_word
-
-    cmp eax, OFFSET word_repeat_link
     je compile_exec_word
 
     cmp eax, OFFSET word_colon_link
@@ -987,62 +971,6 @@ do_again PROC
 do_again_exit:
     ret
 do_again ENDP
-
-; WHILE compiles a conditional exit after a BEGIN marker.
-; Compile-stack before: [ ... begin-address ]
-; Compile-stack after : [ ... begin-address exit-placeholder ]
-; Runtime stack effect of the generated 0branch: ( flag -- )
-do_while PROC
-    cmp state, 1
-    jne do_while_exit
-
-    ; The BEGIN address remains on the compile stack.
-    ; Compile 0branch followed by an unresolved target cell.
-    mov eax, OFFSET word_0branch_link
-    call compile_dword
-
-    mov eax, here
-    call push_compile
-
-    xor eax, eax
-    call compile_dword
-
-do_while_exit:
-    ret
-do_while ENDP
-
-; REPEAT closes BEGIN ... WHILE ... REPEAT.
-; It compiles an unconditional branch back to BEGIN, then patches
-; WHILE's pending target so a false condition exits after the loop.
-do_repeat PROC
-    cmp state, 1
-    jne do_repeat_exit
-
-    ; Top item is WHILE's exit placeholder.
-    call pop_compile
-    test eax, eax
-    jz do_repeat_exit
-    mov edx, eax
-
-    ; Next item is BEGIN's backward target.
-    call pop_compile
-    test eax, eax
-    jz do_repeat_exit
-    mov ecx, eax
-
-    mov eax, OFFSET word_branch_link
-    call compile_dword
-
-    mov eax, ecx
-    call compile_dword
-
-    ; HERE now points to the first instruction after the loop.
-    mov eax, here
-    mov DWORD PTR [edx], eax
-
-do_repeat_exit:
-    ret
-do_repeat ENDP
 
 ; =========================================================
 ; ARITHMETIC / COMPARISONS / MEMORY

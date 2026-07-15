@@ -1,41 +1,3 @@
-; =========================================================
-; Proyecto: Intérprete Forth para Windows x86 (32 bits) en MASM
-; Archivo : forth_while_repeat.asm
-; Estado  : versión funcional de trabajo
-;
-; Incluye:
-;   - Consola interactiva y parser por tokens
-;   - Normalización del input a minúsculas
-;   - Diccionario estático y definiciones dinámicas con : y ;
-;   - Stack de datos y literales compilados mediante lit
-;   - Aritmética: + - * /
-;   - Comparaciones: = < > 0= 0< 0>
-;   - Stack: dup drop swap over depth
-;   - Utilidades: . .s clear words quit
-;   - Memoria: constant variable @ !
-;   - Saltos internos: 0branch branch
-;   - Condicionales: if else then
-;   - Ciclos: begin until again while repeat
-;   - Salida anticipada de palabras compiladas: exit
-;
-; Cambios recientes:
-;   - Agregadas las palabras de compilación while y repeat
-;   - while compila un salto condicional de salida pendiente
-;   - repeat compila el salto hacia begin y resuelve la salida
-;   - Se conserva la corrección del enlace de constant y variable
-;
-; Notas:
-;   - Las palabras de control se ejecutan durante la compilación
-;   - Las direcciones de salto compiladas son absolutas
-;   - while debe utilizarse después de begin
-;   - repeat debe cerrar la estructura begin ... while ... repeat
-;   - again crea un ciclo infinito salvo que se use exit
-;
-; Próxima etapa prevista:
-;   - Mejorar la validación de estructuras de control incompletas
-;   - Agregar más palabras de stack o un return stack
-; =========================================================
-
 .386
 .model flat, stdcall
 option casemap:none
@@ -46,8 +8,6 @@ ReadConsoleA  PROTO :DWORD, :DWORD, :DWORD, :DWORD, :DWORD
 ExitProcess   PROTO :DWORD
 
 do_lit           PROTO
-do_0branch       PROTO
-do_branch        PROTO
 do_plus          PROTO
 do_minus         PROTO
 do_mul           PROTO
@@ -76,21 +36,10 @@ do_words         PROTO
 do_colon_start   PROTO
 do_semicolon     PROTO
 do_colon         PROTO
-do_if            PROTO
-do_else          PROTO
-do_then          PROTO
-do_begin         PROTO
-do_until         PROTO
-do_again         PROTO
-do_while         PROTO
-do_repeat        PROTO
-do_exit          PROTO
 do_quit          PROTO
 
 copy_token_to_name_here PROTO
 compile_dword PROTO
-push_compile PROTO
-pop_compile PROTO
 
 includelib kernel32.lib
 
@@ -137,10 +86,6 @@ data_space      dd 1024 dup(0)
 data_here       dd OFFSET data_space
 current_def     dd 0
 ip              dd 0
-exit_target     dd 0
-
-compile_stack   dd 128 dup(0)
-compile_sp      dd 0
 
 ; =========================================================
 ; STATIC DICTIONARY
@@ -153,18 +98,8 @@ word_lit_link   dd 0
 word_lit_name   dd OFFSET name_lit
 word_lit_code   dd OFFSET do_lit
 
-name_0branch      db "0branch",0
-word_0branch_link dd OFFSET word_lit_link
-word_0branch_name dd OFFSET name_0branch
-word_0branch_code dd OFFSET do_0branch
-
-name_branch      db "branch",0
-word_branch_link dd OFFSET word_0branch_link
-word_branch_name dd OFFSET name_branch
-word_branch_code dd OFFSET do_branch
-
 name_plus       db "+",0
-word_plus_link  dd OFFSET word_branch_link
+word_plus_link  dd OFFSET word_lit_link
 word_plus_name  dd OFFSET name_plus
 word_plus_code  dd OFFSET do_plus
 
@@ -288,53 +223,8 @@ word_semicolon_link dd OFFSET word_colon_link
 word_semicolon_name dd OFFSET name_semicolon
 word_semicolon_code dd OFFSET do_semicolon
 
-name_if      db "if",0
-word_if_link dd OFFSET word_semicolon_link
-word_if_name dd OFFSET name_if
-word_if_code dd OFFSET do_if
-
-name_else      db "else",0
-word_else_link dd OFFSET word_if_link
-word_else_name dd OFFSET name_else
-word_else_code dd OFFSET do_else
-
-name_then      db "then",0
-word_then_link dd OFFSET word_else_link
-word_then_name dd OFFSET name_then
-word_then_code dd OFFSET do_then
-
-name_begin      db "begin",0
-word_begin_link dd OFFSET word_then_link
-word_begin_name dd OFFSET name_begin
-word_begin_code dd OFFSET do_begin
-
-name_until      db "until",0
-word_until_link dd OFFSET word_begin_link
-word_until_name dd OFFSET name_until
-word_until_code dd OFFSET do_until
-
-name_again      db "again",0
-word_again_link dd OFFSET word_until_link
-word_again_name dd OFFSET name_again
-word_again_code dd OFFSET do_again
-
-name_while      db "while",0
-word_while_link dd OFFSET word_again_link
-word_while_name dd OFFSET name_while
-word_while_code dd OFFSET do_while
-
-name_repeat      db "repeat",0
-word_repeat_link dd OFFSET word_while_link
-word_repeat_name dd OFFSET name_repeat
-word_repeat_code dd OFFSET do_repeat
-
-name_exit       db "exit",0
-word_exit_link  dd OFFSET word_repeat_link
-word_exit_name  dd OFFSET name_exit
-word_exit_code  dd OFFSET do_exit
-
 name_quit       db "quit",0
-word_quit_link  dd OFFSET word_exit_link
+word_quit_link  dd OFFSET word_semicolon_link
 word_quit_name  dd OFFSET name_quit
 word_quit_code  dd OFFSET do_quit
 
@@ -427,30 +317,6 @@ compile_known_word:
     cmp eax, OFFSET word_semicolon_link
     je compile_exec_word
 
-    cmp eax, OFFSET word_if_link
-    je compile_exec_word
-
-    cmp eax, OFFSET word_else_link
-    je compile_exec_word
-
-    cmp eax, OFFSET word_then_link
-    je compile_exec_word
-
-    cmp eax, OFFSET word_begin_link
-    je compile_exec_word
-
-    cmp eax, OFFSET word_until_link
-    je compile_exec_word
-
-    cmp eax, OFFSET word_again_link
-    je compile_exec_word
-
-    cmp eax, OFFSET word_while_link
-    je compile_exec_word
-
-    cmp eax, OFFSET word_repeat_link
-    je compile_exec_word
-
     cmp eax, OFFSET word_colon_link
     je compile_invalid
 
@@ -475,7 +341,6 @@ compile_invalid:
     call print_error
     mov state, 0
     mov current_def, 0
-    mov compile_sp, 0
     ret
 
 skip_token:
@@ -694,26 +559,6 @@ compile_dword PROC
     ret
 compile_dword ENDP
 
-push_compile PROC
-    mov ebx, compile_sp
-    mov DWORD PTR compile_stack[ebx*4], eax
-    inc compile_sp
-    ret
-push_compile ENDP
-
-pop_compile PROC
-    cmp compile_sp, 0
-    jle pop_compile_empty
-    dec compile_sp
-    mov ebx, compile_sp
-    mov eax, DWORD PTR compile_stack[ebx*4]
-    ret
-
-pop_compile_empty:
-    xor eax, eax
-    ret
-pop_compile ENDP
-
 ; =========================================================
 ; STACK
 ; =========================================================
@@ -750,34 +595,6 @@ do_lit PROC
     call push_stack
     ret
 do_lit ENDP
-
-do_0branch PROC
-    push ebx
-    call pop_stack
-    mov ebx, ip
-    cmp eax, 0
-    jne do_0branch_no_jump
-
-    mov eax, DWORD PTR [ebx]
-    mov ip, eax
-    pop ebx
-    ret
-
-do_0branch_no_jump:
-    add ebx, 4
-    mov ip, ebx
-    pop ebx
-    ret
-do_0branch ENDP
-
-do_branch PROC
-    push ebx
-    mov ebx, ip
-    mov eax, DWORD PTR [ebx]
-    mov ip, eax
-    pop ebx
-    ret
-do_branch ENDP
 
 do_colon_start PROC
 find_colon_end:
@@ -820,7 +637,6 @@ have_name:
     mov eax, current_def
     mov last, eax
     mov state, 1
-    mov compile_sp, 0
 
 dcs_exit:
     ret
@@ -834,7 +650,6 @@ do_semicolon PROC
     call compile_dword
     mov state, 0
     mov current_def, 0
-    mov compile_sp, 0
 
 ds_exit:
     ret
@@ -868,181 +683,6 @@ dc_done:
     pop ebx
     ret
 do_colon ENDP
-
-; EXIT ends the currently executing colon definition.
-; It redirects IP to a permanent zero cell. On the next
-; do_colon iteration, the zero token terminates the word.
-do_exit PROC
-    mov ip, OFFSET exit_target
-    ret
-do_exit ENDP
-
-do_if PROC
-    cmp state, 1
-    jne do_if_exit
-
-    mov eax, OFFSET word_0branch_link
-    call compile_dword
-
-    mov eax, here
-    call push_compile
-
-    xor eax, eax
-    call compile_dword
-
-do_if_exit:
-    ret
-do_if ENDP
-
-do_else PROC
-    cmp state, 1
-    jne do_else_exit
-
-    mov eax, OFFSET word_branch_link
-    call compile_dword
-
-    mov edx, here
-    xor eax, eax
-    call compile_dword
-
-    call pop_compile
-    test eax, eax
-    jz do_else_exit
-
-    mov ecx, here
-    mov DWORD PTR [eax], ecx
-
-    mov eax, edx
-    call push_compile
-
-do_else_exit:
-    ret
-do_else ENDP
-
-do_then PROC
-    cmp state, 1
-    jne do_then_exit
-
-    call pop_compile
-    test eax, eax
-    jz do_then_exit
-
-    mov edx, here
-    mov DWORD PTR [eax], edx
-
-do_then_exit:
-    ret
-do_then ENDP
-
-; BEGIN marks the current compilation address.
-do_begin PROC
-    cmp state, 1
-    jne do_begin_exit
-
-    mov eax, here
-    call push_compile
-
-do_begin_exit:
-    ret
-do_begin ENDP
-
-; UNTIL compiles a backward conditional branch.
-; Runtime stack effect: ( flag -- )
-; A zero flag repeats the loop; nonzero exits it.
-do_until PROC
-    cmp state, 1
-    jne do_until_exit
-
-    call pop_compile
-    test eax, eax
-    jz do_until_exit
-    mov edx, eax
-
-    mov eax, OFFSET word_0branch_link
-    call compile_dword
-
-    mov eax, edx
-    call compile_dword
-
-do_until_exit:
-    ret
-do_until ENDP
-
-; AGAIN compiles an unconditional backward branch.
-do_again PROC
-    cmp state, 1
-    jne do_again_exit
-
-    call pop_compile
-    test eax, eax
-    jz do_again_exit
-    mov edx, eax
-
-    mov eax, OFFSET word_branch_link
-    call compile_dword
-
-    mov eax, edx
-    call compile_dword
-
-do_again_exit:
-    ret
-do_again ENDP
-
-; WHILE compiles a conditional exit after a BEGIN marker.
-; Compile-stack before: [ ... begin-address ]
-; Compile-stack after : [ ... begin-address exit-placeholder ]
-; Runtime stack effect of the generated 0branch: ( flag -- )
-do_while PROC
-    cmp state, 1
-    jne do_while_exit
-
-    ; The BEGIN address remains on the compile stack.
-    ; Compile 0branch followed by an unresolved target cell.
-    mov eax, OFFSET word_0branch_link
-    call compile_dword
-
-    mov eax, here
-    call push_compile
-
-    xor eax, eax
-    call compile_dword
-
-do_while_exit:
-    ret
-do_while ENDP
-
-; REPEAT closes BEGIN ... WHILE ... REPEAT.
-; It compiles an unconditional branch back to BEGIN, then patches
-; WHILE's pending target so a false condition exits after the loop.
-do_repeat PROC
-    cmp state, 1
-    jne do_repeat_exit
-
-    ; Top item is WHILE's exit placeholder.
-    call pop_compile
-    test eax, eax
-    jz do_repeat_exit
-    mov edx, eax
-
-    ; Next item is BEGIN's backward target.
-    call pop_compile
-    test eax, eax
-    jz do_repeat_exit
-    mov ecx, eax
-
-    mov eax, OFFSET word_branch_link
-    call compile_dword
-
-    mov eax, ecx
-    call compile_dword
-
-    ; HERE now points to the first instruction after the loop.
-    mov eax, here
-    mov DWORD PTR [edx], eax
-
-do_repeat_exit:
-    ret
-do_repeat ENDP
 
 ; =========================================================
 ; ARITHMETIC / COMPARISONS / MEMORY
@@ -1278,8 +918,8 @@ have_constant_name:
     mov DWORD PTR [ebx], edx   ; value
     add ebx, 4
 
-    mov eax, ebx
-    sub eax, 16
+    mov eax, here
+    sub eax, 12
     mov last, eax
     mov here, ebx
 
@@ -1333,8 +973,8 @@ have_variable_name:
     mov DWORD PTR [ebx], edx   ; addr
     add ebx, 4
 
-    mov eax, ebx
-    sub eax, 16
+    mov eax, here
+    sub eax, 12
     mov last, eax
     mov here, ebx
 

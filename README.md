@@ -4,43 +4,37 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
 
 ## Estado actual
 
-La versión actual ya implementa:
+ Incluye:
+   - Consola interactiva y parser por tokens
+   - Normalización del input a minúsculas
+   - Diccionario estático y definiciones dinámicas con : y ;
+   - Stack de datos y literales compilados mediante lit
+   - Aritmética: + - * /
+   - Comparaciones: = < > 0= 0< 0>
+   - Stack: dup drop swap over depth
+   - Utilidades: . .s clear words quit
+   - Memoria: constant variable @ !
+   - Saltos internos: 0branch branch
+   - Condicionales: if else then
+   - Ciclos: begin until again while repeat
+   - Salida anticipada de palabras compiladas: exit
 
-- consola interactiva
-- parser por tokens
-- normalización de input a minúsculas
-- stack de datos
-- diccionario estático
-- diccionario dinámico mínimo
-- definiciones de palabras con `:` y `;`
-- soporte de literales compilados (`lit`)
-- ejecución de palabras compiladas (`do_colon`)
-- aritmética:
-  - `+`
-  - `-`
-  - `*`
-  - `/`
-- comparaciones:
-  - `=`
-  - `<`
-  - `>`
-  - `0=`
-  - `0<`
-  - `0>`
-- palabras de stack:
-  - `dup`
-  - `drop`
-  - `swap`
-  - `over`
-  - `depth`
-- utilidades:
-  - `.`
-  - `.s`
-  - `clear`
-  - `words`
-  - `quit`
-- manejo básico de error con `?`
+ Cambios recientes:
+   - Agregadas las palabras de compilación while y repeat
+   - while compila un salto condicional de salida pendiente
+   - repeat compila el salto hacia begin y resuelve la salida
+   - Se conserva la corrección del enlace de constant y variable
 
+ Notas:
+   - Las palabras de control se ejecutan durante la compilación
+   - Las direcciones de salto compiladas son absolutas
+   - while debe utilizarse después de begin
+   - repeat debe cerrar la estructura begin ... while ... repeat
+   - again crea un ciclo infinito salvo que se use exit
+
+ Próxima etapa prevista:
+   - Mejorar la validación de estructuras de control incompletas
+   - Agregar más palabras de stack o un return stack
 ## Ejemplos
 
 ### Aritmética básica
@@ -108,38 +102,6 @@ Ejemplo usando `ml.exe` y `link.exe`:
 ml.exe /c /Cp /coff src\forth_entrega.asm
 link /SUBSYSTEM:console /DEFAULTLIB:kernel32.lib forth_entrega.obj /ENTRY:main
 ```
-
-## Roadmap
-
-### Completado
-- stack de datos
-- parser por tokens
-- diccionario estático
-- definiciones con `:` y `;`
-- `lit`
-- `do_colon`
-- aritmética, comparaciones y palabras básicas de stack
-- `.s` pulido
-- `depth`
-- `0=`, `0<`, `0>`
-
-### Próximo bloque
-- `constant`
-- `variable`
-- `@`
-- `!`
-
-### Más adelante
-- `if else then`
-- `begin until again`
-- `>r r> r@`
-- memoria más completa
-- port limpio a x64
-
-## Objetivo del proyecto
-
-Construir primero un **Forth serio en 32 bits** como base estable y didáctica.  
-Una vez consolidada la arquitectura, realizar un **port limpio a 64 bits** como segunda etapa del proyecto.
 
 ## Licencia
 
