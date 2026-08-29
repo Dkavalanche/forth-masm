@@ -12,6 +12,8 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - Aritmética: + - * /
    - Comparaciones: = < > 0= 0< 0>
    - Stack: dup drop swap over depth
+   - Return stack: >r r> r@
+   - Validación de underflow y división por cero
    - Utilidades: . .s clear words quit
    - Memoria: constant variable @ !
    - Saltos internos: 0branch branch
@@ -20,10 +22,8 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - Salida anticipada de palabras compiladas: exit
 
  Cambios recientes:
-   - Agregadas las palabras de compilación while y repeat
-   - while compila un salto condicional de salida pendiente
-   - repeat compila el salto hacia begin y resuelve la salida
-   - Se conserva la corrección del enlace de constant y variable
+   - Se detecta underflow en palabras que consumen la pila de datos o return stack
+   - La división por cero informa un error y conserva los operandos
 
  Notas:
    - Las palabras de control se ejecutan durante la compilación
@@ -31,10 +31,12 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - while debe utilizarse después de begin
    - repeat debe cerrar la estructura begin ... while ... repeat
    - again crea un ciclo infinito salvo que se use exit
+   - clear vacía solamente la pila de datos
+   - Una línea con error no imprime OK
 
  Próxima etapa prevista:
    - Mejorar la validación de estructuras de control incompletas
-   - Agregar más palabras de stack o un return stack
+   - Agregar ciclos contados: do loop +loop i
 ## Ejemplos
 
 ### Aritmética básica
@@ -72,6 +74,35 @@ Resultado esperado:
 
 ```text
 [ 1 2 3 ]
+```
+
+### Return stack
+
+```forth
+10 >r
+r@ .
+r> .
+```
+
+Resultado esperado:
+
+```text
+10
+10
+```
+
+### Errores de ejecución
+
+```forth
++
+10 0 /
+```
+
+Salida esperada:
+
+```text
+Stack underflow
+Division by zero
 ```
 
 ## Estructura del proyecto

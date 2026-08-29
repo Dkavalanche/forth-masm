@@ -1,13 +1,15 @@
 ; =========================================================
 ; Proyecto: Intérprete Forth para Windows x86 (32 bits) en MASM
-; Archivo : forth_while_repeat.asm
-; Estado  : versión funcional de trabajo
+; Archivo : forth.asm
+; Estado  : versión funcional con validación básica de errores
 ;
 ; Incluye:
 ;   - Consola interactiva y parser por tokens
 ;   - Normalización del input a minúsculas
 ;   - Diccionario estático y definiciones dinámicas con : y ;
 ;   - Stack de datos y literales compilados mediante lit
+;   - Return stack: >r r> r@
+;   - Validación de underflow y división por cero
 ;   - Aritmética: + - * /
 ;   - Comparaciones: = < > 0= 0< 0>
 ;   - Stack: dup drop swap over depth
@@ -19,10 +21,9 @@
 ;   - Salida anticipada de palabras compiladas: exit
 ;
 ; Cambios recientes:
-;   - Agregadas las palabras de compilación while y repeat
-;   - while compila un salto condicional de salida pendiente
-;   - repeat compila el salto hacia begin y resuelve la salida
-;   - Se conserva la corrección del enlace de constant y variable
+;   - Detectado underflow en las palabras que consumen stacks
+;   - Detectada división por cero sin consumir sus operandos
+;   - Las líneas con error no imprimen OK
 ;
 ; Notas:
 ;   - Las palabras de control se ejecutan durante la compilación
@@ -30,10 +31,12 @@
 ;   - while debe utilizarse después de begin
 ;   - repeat debe cerrar la estructura begin ... while ... repeat
 ;   - again crea un ciclo infinito salvo que se use exit
+;   - clear vacía solamente la pila de datos
+;   - El underflow informa el error y conserva el contenido existente
 ;
 ; Próxima etapa prevista:
-;   - Mejorar la validación de estructuras de control incompletas
-;   - Agregar más palabras de stack o un return stack
+;   - Validar estructuras de control incompletas durante la compilación
+;   - Agregar ciclos contados: do loop +loop i
 ; =========================================================
 
 .386
@@ -71,6 +74,9 @@ do_drop          PROTO
 do_dot_s         PROTO
 do_swap          PROTO
 do_over          PROTO
+do_to_r          PROTO
+do_r_from        PROTO
+do_r_fetch       PROTO
 do_clear         PROTO
 do_words         PROTO
 do_colon_start   PROTO
@@ -113,6 +119,12 @@ ok_len          equ 4
 err_msg         db "?",13,10,0
 err_len         equ 3
 
+stack_underflow_msg db "Stack underflow",13,10,0
+stack_underflow_len equ ($ - stack_underflow_msg)
+
+division_zero_msg db "Division by zero",13,10,0
+division_zero_len equ ($ - division_zero_msg)
+
 space           db " "
 crlf            db 13,10
 lbracket        db "[ "
@@ -120,6 +132,8 @@ rbracket        db " ]",13,10
 
 stack           dd 1000 dup(0)
 dsp             dd 0
+return_stack    dd 1000 dup(0)
+rsp             dd 0
 
 buffer_size     equ 256
 buffer          db buffer_size dup(0)
@@ -129,6 +143,7 @@ bytesWritten    dd ?
 numBuffer       db 16 dup(0)
 
 state           dd 0
+error_flag      dd 0
 dict_space      dd 4096 dup(0)
 here            dd OFFSET dict_space
 name_space      db 2048 dup(0)
@@ -268,8 +283,23 @@ word_over_link  dd OFFSET word_swap_link
 word_over_name  dd OFFSET name_over
 word_over_code  dd OFFSET do_over
 
+name_to_r       db ">r",0
+word_to_r_link  dd OFFSET word_over_link
+word_to_r_name  dd OFFSET name_to_r
+word_to_r_code  dd OFFSET do_to_r
+
+name_r_from       db "r>",0
+word_r_from_link  dd OFFSET word_to_r_link
+word_r_from_name  dd OFFSET name_r_from
+word_r_from_code  dd OFFSET do_r_from
+
+name_r_fetch       db "r@",0
+word_r_fetch_link  dd OFFSET word_r_from_link
+word_r_fetch_name  dd OFFSET name_r_fetch
+word_r_fetch_code  dd OFFSET do_r_fetch
+
 name_clear      db "clear",0
-word_clear_link dd OFFSET word_over_link
+word_clear_link dd OFFSET word_r_fetch_link
 word_clear_name dd OFFSET name_clear
 word_clear_code dd OFFSET do_clear
 
@@ -351,7 +381,10 @@ main PROC
 main_loop:
     call print_prompt
     call read_line
+    mov error_flag, 0
     call interpret
+    cmp error_flag, 0
+    jne main_loop
     call print_ok
     jmp main_loop
 main ENDP
@@ -753,6 +786,8 @@ do_lit ENDP
 
 do_0branch PROC
     push ebx
+    cmp dsp, 1
+    jb do_0branch_underflow
     call pop_stack
     mov ebx, ip
     cmp eax, 0
@@ -766,6 +801,11 @@ do_0branch PROC
 do_0branch_no_jump:
     add ebx, 4
     mov ip, ebx
+    pop ebx
+    ret
+
+do_0branch_underflow:
+    call print_stack_underflow
     pop ebx
     ret
 do_0branch ENDP
@@ -1049,7 +1089,7 @@ do_repeat ENDP
 ; =========================================================
 do_plus PROC
     cmp dsp, 2
-    jb do_plus_end
+    jb do_plus_underflow
     call pop_stack
     mov edx, eax
     call pop_stack
@@ -1057,11 +1097,14 @@ do_plus PROC
     call push_stack
 do_plus_end:
     ret
+do_plus_underflow:
+    call print_stack_underflow
+    ret
 do_plus ENDP
 
 do_minus PROC
     cmp dsp, 2
-    jb do_minus_end
+    jb do_minus_underflow
     call pop_stack
     mov edx, eax
     call pop_stack
@@ -1069,11 +1112,14 @@ do_minus PROC
     call push_stack
 do_minus_end:
     ret
+do_minus_underflow:
+    call print_stack_underflow
+    ret
 do_minus ENDP
 
 do_mul PROC
     cmp dsp, 2
-    jb do_mul_end
+    jb do_mul_underflow
     call pop_stack
     mov edx, eax
     call pop_stack
@@ -1081,14 +1127,19 @@ do_mul PROC
     call push_stack
 do_mul_end:
     ret
+do_mul_underflow:
+    call print_stack_underflow
+    ret
 do_mul ENDP
 
 do_div PROC
     cmp dsp, 2
-    jb do_div_end
+    jb do_div_underflow
+    mov ebx, dsp
+    dec ebx
+    cmp DWORD PTR stack[ebx*4], 0
+    je do_div_zero
     call pop_stack
-    cmp eax, 0
-    je do_div_end
     mov ecx, eax
     call pop_stack
     cdq
@@ -1096,11 +1147,17 @@ do_div PROC
     call push_stack
 do_div_end:
     ret
+do_div_underflow:
+    call print_stack_underflow
+    ret
+do_div_zero:
+    call print_division_by_zero
+    ret
 do_div ENDP
 
 do_eq PROC
     cmp dsp, 2
-    jb do_eq_end
+    jb do_eq_underflow
     call pop_stack
     mov edx, eax
     call pop_stack
@@ -1114,11 +1171,14 @@ do_eq_false:
     call push_stack
 do_eq_end:
     ret
+do_eq_underflow:
+    call print_stack_underflow
+    ret
 do_eq ENDP
 
 do_lt PROC
     cmp dsp, 2
-    jb do_lt_end
+    jb do_lt_underflow
     call pop_stack
     mov edx, eax
     call pop_stack
@@ -1132,11 +1192,14 @@ do_lt_false:
     call push_stack
 do_lt_end:
     ret
+do_lt_underflow:
+    call print_stack_underflow
+    ret
 do_lt ENDP
 
 do_gt PROC
     cmp dsp, 2
-    jb do_gt_end
+    jb do_gt_underflow
     call pop_stack
     mov edx, eax
     call pop_stack
@@ -1150,11 +1213,14 @@ do_gt_false:
     call push_stack
 do_gt_end:
     ret
+do_gt_underflow:
+    call print_stack_underflow
+    ret
 do_gt ENDP
 
 do_zero_eq PROC
     cmp dsp, 1
-    jb do_zero_eq_end
+    jb do_zero_eq_underflow
     call pop_stack
     cmp eax, 0
     jne do_zero_eq_false
@@ -1166,11 +1232,14 @@ do_zero_eq_false:
     call push_stack
 do_zero_eq_end:
     ret
+do_zero_eq_underflow:
+    call print_stack_underflow
+    ret
 do_zero_eq ENDP
 
 do_zero_lt PROC
     cmp dsp, 1
-    jb do_zero_lt_end
+    jb do_zero_lt_underflow
     call pop_stack
     cmp eax, 0
     jge do_zero_lt_false
@@ -1182,11 +1251,14 @@ do_zero_lt_false:
     call push_stack
 do_zero_lt_end:
     ret
+do_zero_lt_underflow:
+    call print_stack_underflow
+    ret
 do_zero_lt ENDP
 
 do_zero_gt PROC
     cmp dsp, 1
-    jb do_zero_gt_end
+    jb do_zero_gt_underflow
     call pop_stack
     cmp eax, 0
     jle do_zero_gt_false
@@ -1198,26 +1270,35 @@ do_zero_gt_false:
     call push_stack
 do_zero_gt_end:
     ret
+do_zero_gt_underflow:
+    call print_stack_underflow
+    ret
 do_zero_gt ENDP
 
 do_fetch PROC
     cmp dsp, 1
-    jb do_fetch_end
+    jb do_fetch_underflow
     call pop_stack
     mov eax, DWORD PTR [eax]
     call push_stack
 do_fetch_end:
     ret
+do_fetch_underflow:
+    call print_stack_underflow
+    ret
 do_fetch ENDP
 
 do_store PROC
     cmp dsp, 2
-    jb do_store_end
+    jb do_store_underflow
     call pop_stack
     mov edx, eax
     call pop_stack
     mov DWORD PTR [edx], eax
 do_store_end:
+    ret
+do_store_underflow:
+    call print_stack_underflow
     ret
 do_store ENDP
 
@@ -1237,7 +1318,7 @@ do_constant_def PROC
     cmp state, 0
     jne dcd_exit
     cmp dsp, 1
-    jb dcd_exit
+    jb dcd_underflow
 
 find_constant_end:
     mov al, [esi]
@@ -1284,6 +1365,9 @@ have_constant_name:
     mov here, ebx
 
 dcd_exit:
+    ret
+dcd_underflow:
+    call print_stack_underflow
     ret
 do_constant_def ENDP
 
@@ -1353,16 +1437,19 @@ do_depth ENDP
 
 do_dot PROC
     cmp dsp, 1
-    jb do_dot_end
+    jb do_dot_underflow
     call pop_stack
     call print_number
 do_dot_end:
+    ret
+do_dot_underflow:
+    call print_stack_underflow
     ret
 do_dot ENDP
 
 do_dup PROC
     cmp dsp, 1
-    jb do_dup_end
+    jb do_dup_underflow
     call pop_stack
     mov edx, eax
     call push_stack
@@ -1370,13 +1457,19 @@ do_dup PROC
     call push_stack
 do_dup_end:
     ret
+do_dup_underflow:
+    call print_stack_underflow
+    ret
 do_dup ENDP
 
 do_drop PROC
     cmp dsp, 1
-    jb do_drop_end
+    jb do_drop_underflow
     call pop_stack
 do_drop_end:
+    ret
+do_drop_underflow:
+    call print_stack_underflow
     ret
 do_drop ENDP
 
@@ -1387,7 +1480,7 @@ do_dot_s ENDP
 
 do_swap PROC
     cmp dsp, 2
-    jb do_swap_end
+    jb do_swap_underflow
     mov ebx, dsp
     dec ebx
     mov eax, DWORD PTR stack[ebx*4]
@@ -1398,18 +1491,72 @@ do_swap PROC
     mov DWORD PTR stack[ebx*4], edx
 do_swap_end:
     ret
+do_swap_underflow:
+    call print_stack_underflow
+    ret
 do_swap ENDP
 
 do_over PROC
     cmp dsp, 2
-    jb do_over_end
+    jb do_over_underflow
     mov ebx, dsp
     sub ebx, 2
     mov eax, DWORD PTR stack[ebx*4]
     call push_stack
 do_over_end:
     ret
+do_over_underflow:
+    call print_stack_underflow
+    ret
 do_over ENDP
+
+; >r moves the top data-stack value to the return stack.
+; Stack effect: ( x -- ) ( R: -- x )
+do_to_r PROC
+    cmp dsp, 1
+    jb do_to_r_underflow
+    call pop_stack
+    mov ebx, rsp
+    mov DWORD PTR return_stack[ebx*4], eax
+    inc rsp
+do_to_r_end:
+    ret
+do_to_r_underflow:
+    call print_stack_underflow
+    ret
+do_to_r ENDP
+
+; r> moves the top return-stack value to the data stack.
+; Stack effect: ( -- x ) ( R: x -- )
+do_r_from PROC
+    cmp rsp, 1
+    jb do_r_from_underflow
+    dec rsp
+    mov ebx, rsp
+    mov eax, DWORD PTR return_stack[ebx*4]
+    call push_stack
+do_r_from_end:
+    ret
+do_r_from_underflow:
+    call print_stack_underflow
+    ret
+do_r_from ENDP
+
+; r@ copies the top return-stack value to the data stack.
+; Stack effect: ( -- x ) ( R: x -- x )
+do_r_fetch PROC
+    cmp rsp, 1
+    jb do_r_fetch_underflow
+    mov ebx, rsp
+    dec ebx
+    mov eax, DWORD PTR return_stack[ebx*4]
+    call push_stack
+do_r_fetch_end:
+    ret
+do_r_fetch_underflow:
+    call print_stack_underflow
+    ret
+do_r_fetch ENDP
 
 do_clear PROC
     mov dsp, 0
@@ -1473,10 +1620,27 @@ print_ok PROC
 print_ok ENDP
 
 print_error PROC
+    mov error_flag, 1
     invoke GetStdHandle, -11
     invoke WriteConsoleA, eax, ADDR err_msg, err_len, ADDR bytesWritten, 0
     ret
 print_error ENDP
+
+print_stack_underflow PROC
+    mov error_flag, 1
+    invoke GetStdHandle, -11
+    invoke WriteConsoleA, eax, ADDR stack_underflow_msg, stack_underflow_len, ADDR bytesWritten, 0
+    call do_exit
+    ret
+print_stack_underflow ENDP
+
+print_division_by_zero PROC
+    mov error_flag, 1
+    invoke GetStdHandle, -11
+    invoke WriteConsoleA, eax, ADDR division_zero_msg, division_zero_len, ADDR bytesWritten, 0
+    call do_exit
+    ret
+print_division_by_zero ENDP
 
 print_space PROC
     invoke GetStdHandle, -11
