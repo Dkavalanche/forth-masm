@@ -92,6 +92,36 @@ Resultado esperado:
 10
 ```
 
+### Ciclo de 1 a 10
+
+```forth
+: contar-1-a-10
+  0
+  begin
+    dup 10 < while
+    1 + dup .
+  repeat
+  drop
+;
+
+contar-1-a-10
+```
+
+Salida esperada:
+
+```text
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+```
+
 ### Errores de ejecución
 
 ```forth
