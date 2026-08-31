@@ -1,7 +1,7 @@
 ; =========================================================
 ; Proyecto: Intérprete Forth para Windows x86 (32 bits) en MASM
 ; Archivo : forth.asm
-; Estado  : versión funcional con validación básica de errores
+; Estado  : versión funcional con validación de control de flujo
 ;
 ; Incluye:
 ;   - Consola interactiva y parser por tokens
@@ -10,6 +10,7 @@
 ;   - Stack de datos y literales compilados mediante lit
 ;   - Return stack: >r r> r@
 ;   - Validación de underflow y división por cero
+;   - Validación de estructuras de control durante la compilación
 ;   - Aritmética: + - * /
 ;   - Comparaciones: = < > 0= 0< 0>
 ;   - Stack: dup drop swap over depth
@@ -21,9 +22,8 @@
 ;   - Salida anticipada de palabras compiladas: exit
 ;
 ; Cambios recientes:
-;   - Detectado underflow en las palabras que consumen stacks
-;   - Detectada división por cero sin consumir sus operandos
-;   - Las líneas con error no imprimen OK
+;   - Validada la correspondencia entre if/else/then y los ciclos
+;   - Una definición inválida restaura el diccionario y se descarta
 ;
 ; Notas:
 ;   - Las palabras de control se ejecutan durante la compilación
@@ -33,10 +33,12 @@
 ;   - again crea un ciclo infinito salvo que se use exit
 ;   - clear vacía solamente la pila de datos
 ;   - El underflow informa el error y conserva el contenido existente
+;   - compile_stack almacena direcciones etiquetadas por tipo de control
+;   - dict_space se alinea a 4 bytes para separar direcciones y etiquetas
 ;
 ; Próxima etapa prevista:
-;   - Validar estructuras de control incompletas durante la compilación
 ;   - Agregar ciclos contados: do loop +loop i
+;   - Agregar palabras de stack: rot nip tuck 2dup 2drop
 ; =========================================================
 
 .386
@@ -125,6 +127,9 @@ stack_underflow_len equ ($ - stack_underflow_msg)
 division_zero_msg db "Division by zero",13,10,0
 division_zero_len equ ($ - division_zero_msg)
 
+control_error_msg db "Control structure error",13,10,0
+control_error_len equ ($ - control_error_msg)
+
 space           db " "
 crlf            db 13,10
 lbracket        db "[ "
@@ -144,6 +149,7 @@ numBuffer       db 16 dup(0)
 
 state           dd 0
 error_flag      dd 0
+ALIGN 4
 dict_space      dd 4096 dup(0)
 here            dd OFFSET dict_space
 name_space      db 2048 dup(0)
@@ -151,11 +157,19 @@ name_here       dd OFFSET name_space
 data_space      dd 1024 dup(0)
 data_here       dd OFFSET data_space
 current_def     dd 0
+definition_name_here dd 0
 ip              dd 0
 exit_target     dd 0
 
 compile_stack   dd 128 dup(0)
 compile_sp      dd 0
+
+CONTROL_IF      equ 1
+CONTROL_ELSE    equ 2
+CONTROL_BEGIN   equ 3
+CONTROL_WHILE   equ 0
+CONTROL_MASK    equ 3
+CONTROL_ADDR_MASK equ 0FFFFFFFCh
 
 ; =========================================================
 ; STATIC DICTIONARY
@@ -506,9 +520,7 @@ invalid_token:
 
 compile_invalid:
     call print_error
-    mov state, 0
-    mov current_def, 0
-    mov compile_sp, 0
+    call abort_definition
     ret
 
 skip_token:
@@ -747,6 +759,50 @@ pop_compile_empty:
     ret
 pop_compile ENDP
 
+; Discard the definition currently being compiled and restore the
+; dictionary and name-space pointers to their state before ':'.
+abort_definition PROC
+    cmp state, 1
+    jne abort_done
+
+    mov ebx, current_def
+    test ebx, ebx
+    jz abort_reset
+
+    mov eax, DWORD PTR [ebx]
+    mov last, eax
+    mov here, ebx
+
+    mov eax, definition_name_here
+    mov name_here, eax
+
+abort_reset:
+    mov state, 0
+    mov current_def, 0
+    mov compile_sp, 0
+
+    ; Ignore the remaining tokens of the invalid source line.
+abort_skip_line:
+    mov al, [esi]
+    cmp al, 13
+    je abort_done
+    cmp al, 10
+    je abort_done
+    cmp al, 0
+    je abort_done
+    inc esi
+    jmp abort_skip_line
+
+abort_done:
+    ret
+abort_definition ENDP
+
+report_control_error PROC
+    call print_control_error
+    call abort_definition
+    ret
+report_control_error ENDP
+
 ; =========================================================
 ; STACK
 ; =========================================================
@@ -840,6 +896,8 @@ skip_spaces_after_colon:
     jmp skip_spaces_after_colon
 
 have_name:
+    mov eax, name_here
+    mov definition_name_here, eax
     mov ebx, here
     mov current_def, ebx
 
@@ -868,7 +926,9 @@ do_colon_start ENDP
 
 do_semicolon PROC
     cmp state, 1
-    jne ds_exit
+    jne ds_error
+    cmp compile_sp, 0
+    jne ds_error
 
     xor eax, eax
     call compile_dword
@@ -877,6 +937,9 @@ do_semicolon PROC
     mov compile_sp, 0
 
 ds_exit:
+    ret
+ds_error:
+    call report_control_error
     ret
 do_semicolon ENDP
 
@@ -919,12 +982,13 @@ do_exit ENDP
 
 do_if PROC
     cmp state, 1
-    jne do_if_exit
+    jne do_if_error
 
     mov eax, OFFSET word_0branch_link
     call compile_dword
 
     mov eax, here
+    or eax, CONTROL_IF
     call push_compile
 
     xor eax, eax
@@ -932,57 +996,81 @@ do_if PROC
 
 do_if_exit:
     ret
+do_if_error:
+    call report_control_error
+    ret
 do_if ENDP
 
 do_else PROC
     cmp state, 1
-    jne do_else_exit
+    jne do_else_error
+
+    call pop_compile
+    mov edx, eax
+    and edx, CONTROL_MASK
+    cmp edx, CONTROL_IF
+    jne do_else_error
+    and eax, CONTROL_ADDR_MASK
+    mov edx, eax
 
     mov eax, OFFSET word_branch_link
     call compile_dword
 
-    mov edx, here
+    mov eax, here
+    or eax, CONTROL_ELSE
+    call push_compile
+
     xor eax, eax
     call compile_dword
 
-    call pop_compile
-    test eax, eax
-    jz do_else_exit
-
     mov ecx, here
-    mov DWORD PTR [eax], ecx
-
-    mov eax, edx
-    call push_compile
+    mov DWORD PTR [edx], ecx
 
 do_else_exit:
+    ret
+do_else_error:
+    call report_control_error
     ret
 do_else ENDP
 
 do_then PROC
     cmp state, 1
-    jne do_then_exit
+    jne do_then_error
 
     call pop_compile
-    test eax, eax
-    jz do_then_exit
+    mov edx, eax
+    and edx, CONTROL_MASK
+    cmp edx, CONTROL_IF
+    je do_then_patch
+    cmp edx, CONTROL_ELSE
+    jne do_then_error
+
+do_then_patch:
+    and eax, CONTROL_ADDR_MASK
 
     mov edx, here
     mov DWORD PTR [eax], edx
 
 do_then_exit:
     ret
+do_then_error:
+    call report_control_error
+    ret
 do_then ENDP
 
 ; BEGIN marks the current compilation address.
 do_begin PROC
     cmp state, 1
-    jne do_begin_exit
+    jne do_begin_error
 
     mov eax, here
+    or eax, CONTROL_BEGIN
     call push_compile
 
 do_begin_exit:
+    ret
+do_begin_error:
+    call report_control_error
     ret
 do_begin ENDP
 
@@ -991,11 +1079,14 @@ do_begin ENDP
 ; A zero flag repeats the loop; nonzero exits it.
 do_until PROC
     cmp state, 1
-    jne do_until_exit
+    jne do_until_error
 
     call pop_compile
-    test eax, eax
-    jz do_until_exit
+    mov edx, eax
+    and edx, CONTROL_MASK
+    cmp edx, CONTROL_BEGIN
+    jne do_until_error
+    and eax, CONTROL_ADDR_MASK
     mov edx, eax
 
     mov eax, OFFSET word_0branch_link
@@ -1006,16 +1097,22 @@ do_until PROC
 
 do_until_exit:
     ret
+do_until_error:
+    call report_control_error
+    ret
 do_until ENDP
 
 ; AGAIN compiles an unconditional backward branch.
 do_again PROC
     cmp state, 1
-    jne do_again_exit
+    jne do_again_error
 
     call pop_compile
-    test eax, eax
-    jz do_again_exit
+    mov edx, eax
+    and edx, CONTROL_MASK
+    cmp edx, CONTROL_BEGIN
+    jne do_again_error
+    and eax, CONTROL_ADDR_MASK
     mov edx, eax
 
     mov eax, OFFSET word_branch_link
@@ -1026,6 +1123,9 @@ do_again PROC
 
 do_again_exit:
     ret
+do_again_error:
+    call report_control_error
+    ret
 do_again ENDP
 
 ; WHILE compiles a conditional exit after a BEGIN marker.
@@ -1034,7 +1134,16 @@ do_again ENDP
 ; Runtime stack effect of the generated 0branch: ( flag -- )
 do_while PROC
     cmp state, 1
-    jne do_while_exit
+    jne do_while_error
+
+    cmp compile_sp, 1
+    jb do_while_error
+    mov ebx, compile_sp
+    dec ebx
+    mov eax, DWORD PTR compile_stack[ebx*4]
+    and eax, CONTROL_MASK
+    cmp eax, CONTROL_BEGIN
+    jne do_while_error
 
     ; The BEGIN address remains on the compile stack.
     ; Compile 0branch followed by an unresolved target cell.
@@ -1042,12 +1151,16 @@ do_while PROC
     call compile_dword
 
     mov eax, here
+    or eax, CONTROL_WHILE
     call push_compile
 
     xor eax, eax
     call compile_dword
 
 do_while_exit:
+    ret
+do_while_error:
+    call report_control_error
     ret
 do_while ENDP
 
@@ -1056,18 +1169,24 @@ do_while ENDP
 ; WHILE's pending target so a false condition exits after the loop.
 do_repeat PROC
     cmp state, 1
-    jne do_repeat_exit
+    jne do_repeat_error
 
     ; Top item is WHILE's exit placeholder.
     call pop_compile
-    test eax, eax
-    jz do_repeat_exit
+    mov edx, eax
+    and edx, CONTROL_MASK
+    cmp edx, CONTROL_WHILE
+    jne do_repeat_error
+    and eax, CONTROL_ADDR_MASK
     mov edx, eax
 
     ; Next item is BEGIN's backward target.
     call pop_compile
-    test eax, eax
-    jz do_repeat_exit
+    mov ecx, eax
+    and ecx, CONTROL_MASK
+    cmp ecx, CONTROL_BEGIN
+    jne do_repeat_error
+    and eax, CONTROL_ADDR_MASK
     mov ecx, eax
 
     mov eax, OFFSET word_branch_link
@@ -1081,6 +1200,9 @@ do_repeat PROC
     mov DWORD PTR [edx], eax
 
 do_repeat_exit:
+    ret
+do_repeat_error:
+    call report_control_error
     ret
 do_repeat ENDP
 
@@ -1641,6 +1763,13 @@ print_division_by_zero PROC
     call do_exit
     ret
 print_division_by_zero ENDP
+
+print_control_error PROC
+    mov error_flag, 1
+    invoke GetStdHandle, -11
+    invoke WriteConsoleA, eax, ADDR control_error_msg, control_error_len, ADDR bytesWritten, 0
+    ret
+print_control_error ENDP
 
 print_space PROC
     invoke GetStdHandle, -11

@@ -14,6 +14,7 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - Stack: dup drop swap over depth
    - Return stack: >r r> r@
    - Validación de underflow y división por cero
+   - Validación de estructuras de control durante la compilación
    - Utilidades: . .s clear words quit
    - Memoria: constant variable @ !
    - Saltos internos: 0branch branch
@@ -22,8 +23,8 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - Salida anticipada de palabras compiladas: exit
 
  Cambios recientes:
-   - Se detecta underflow en palabras que consumen la pila de datos o return stack
-   - La división por cero informa un error y conserva los operandos
+   - Se valida la correspondencia entre if/else/then y los ciclos
+   - Una definición inválida se descarta sin alterar el diccionario
 
  Notas:
    - Las palabras de control se ejecutan durante la compilación
@@ -35,8 +36,8 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - Una línea con error no imprime OK
 
  Próxima etapa prevista:
-   - Mejorar la validación de estructuras de control incompletas
    - Agregar ciclos contados: do loop +loop i
+   - Agregar palabras de stack: rot nip tuck 2dup 2drop
 ## Ejemplos
 
 ### Aritmética básica
@@ -104,6 +105,22 @@ Salida esperada:
 Stack underflow
 Division by zero
 ```
+
+### Errores de compilación
+
+```forth
+: sin-cierre if 10 ;
+: ciclo-invalido begin 1 ;
+: else-suelto else 5 ;
+```
+
+Cada línea debe informar:
+
+```text
+Control structure error
+```
+
+Las palabras `sin-cierre`, `ciclo-invalido` y `else-suelto` no deben aparecer en `words`.
 
 ## Estructura del proyecto
 
