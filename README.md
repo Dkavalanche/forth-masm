@@ -177,8 +177,8 @@ forth-masm/
 Ejemplo usando `ml.exe` y `link.exe`:
 
 ```bat
-ml.exe /c /Cp /coff src\forth_entrega.asm
-link /SUBSYSTEM:console /DEFAULTLIB:kernel32.lib forth_entrega.obj /ENTRY:main
+ml.exe /c /Cp /coff src\forth.asm
+link /SUBSYSTEM:console /DEFAULTLIB:kernel32.lib forth.obj /ENTRY:main
 ```
 
 ## Licencia
