@@ -1,7 +1,7 @@
 ; =========================================================
 ; Proyecto: Intérprete Forth para Windows x86 (32 bits) en MASM
 ; Archivo : forth.asm
-; Estado  : versión funcional con validación de control de flujo
+; Estado  : versión funcional con primitivas internas protegidas
 ;
 ; Incluye:
 ;   - Consola interactiva y parser por tokens
@@ -11,6 +11,7 @@
 ;   - Return stack: >r r> r@
 ;   - Validación de underflow y división por cero
 ;   - Validación de estructuras de control durante la compilación
+;   - Primitivas internas protegidas: lit 0branch branch
 ;   - Aritmética: + - * /
 ;   - Comparaciones: = < > 0= 0< 0>
 ;   - Stack: dup drop swap over depth
@@ -22,8 +23,8 @@
 ;   - Salida anticipada de palabras compiladas: exit
 ;
 ; Cambios recientes:
-;   - Validada la correspondencia entre if/else/then y los ciclos
-;   - Una definición inválida restaura el diccionario y se descarta
+;   - Ocultadas lit, 0branch y branch de words
+;   - Rechazada su ejecución directa o compilación manual
 ;
 ; Notas:
 ;   - Las palabras de control se ejecutan durante la compilación
@@ -35,10 +36,12 @@
 ;   - El underflow informa el error y conserva el contenido existente
 ;   - compile_stack almacena direcciones etiquetadas por tipo de control
 ;   - dict_space se alinea a 4 bytes para separar direcciones y etiquetas
+;   - colon_depth identifica la ejecución de una definición compilada
 ;
 ; Próxima etapa prevista:
 ;   - Agregar ciclos contados: do loop +loop i
 ;   - Agregar palabras de stack: rot nip tuck 2dup 2drop
+;   - Agregar comentarios y literales de cadena
 ; =========================================================
 
 .386
@@ -130,6 +133,9 @@ division_zero_len equ ($ - division_zero_msg)
 control_error_msg db "Control structure error",13,10,0
 control_error_len equ ($ - control_error_msg)
 
+internal_word_msg db "Internal word",13,10,0
+internal_word_len equ ($ - internal_word_msg)
+
 space           db " "
 crlf            db 13,10
 lbracket        db "[ "
@@ -159,6 +165,7 @@ data_here       dd OFFSET data_space
 current_def     dd 0
 definition_name_here dd 0
 ip              dd 0
+colon_depth     dd 0
 exit_target     dd 0
 
 compile_stack   dd 128 dup(0)
@@ -471,6 +478,15 @@ compile_mode:
     jmp next_token
 
 compile_known_word:
+    cmp eax, OFFSET word_lit_link
+    je compile_internal_word
+
+    cmp eax, OFFSET word_0branch_link
+    je compile_internal_word
+
+    cmp eax, OFFSET word_branch_link
+    je compile_internal_word
+
     cmp eax, OFFSET word_semicolon_link
     je compile_exec_word
 
@@ -520,6 +536,11 @@ invalid_token:
 
 compile_invalid:
     call print_error
+    call abort_definition
+    ret
+
+compile_internal_word:
+    call print_internal_word_error
     call abort_definition
     ret
 
@@ -829,7 +850,28 @@ pop_stack ENDP
 ; =========================================================
 ; COMPILED WORD SUPPORT
 ; =========================================================
+reject_internal_word PROC
+    call print_internal_word_error
+
+    ; Prevent operands typed after an internal word from being interpreted.
+reject_internal_skip_line:
+    mov al, [esi]
+    cmp al, 13
+    je reject_internal_done
+    cmp al, 10
+    je reject_internal_done
+    cmp al, 0
+    je reject_internal_done
+    inc esi
+    jmp reject_internal_skip_line
+
+reject_internal_done:
+    ret
+reject_internal_word ENDP
+
 do_lit PROC
+    cmp colon_depth, 1
+    jb do_lit_invalid
     push ebx
     mov ebx, ip
     mov eax, DWORD PTR [ebx]
@@ -838,9 +880,14 @@ do_lit PROC
     pop ebx
     call push_stack
     ret
+do_lit_invalid:
+    call reject_internal_word
+    ret
 do_lit ENDP
 
 do_0branch PROC
+    cmp colon_depth, 1
+    jb do_0branch_invalid
     push ebx
     cmp dsp, 1
     jb do_0branch_underflow
@@ -864,14 +911,22 @@ do_0branch_underflow:
     call print_stack_underflow
     pop ebx
     ret
+do_0branch_invalid:
+    call reject_internal_word
+    ret
 do_0branch ENDP
 
 do_branch PROC
+    cmp colon_depth, 1
+    jb do_branch_invalid
     push ebx
     mov ebx, ip
     mov eax, DWORD PTR [ebx]
     mov ip, eax
     pop ebx
+    ret
+do_branch_invalid:
+    call reject_internal_word
     ret
 do_branch ENDP
 
@@ -948,6 +1003,8 @@ do_colon PROC
     push esi
     push ip
 
+    inc colon_depth
+
     lea ebx, [edi+12]
     mov ip, ebx
 
@@ -966,6 +1023,7 @@ dc_loop:
     jmp dc_loop
 
 dc_done:
+    dec colon_depth
     pop ip
     pop esi
     pop ebx
@@ -1698,6 +1756,13 @@ words_loop:
     cmp ebx, 0
     je words_done
 
+    cmp ebx, OFFSET word_lit_link
+    je words_next
+    cmp ebx, OFFSET word_0branch_link
+    je words_next
+    cmp ebx, OFFSET word_branch_link
+    je words_next
+
     mov edi, [ebx+4]
 
 words_name_loop:
@@ -1709,6 +1774,8 @@ words_name_loop:
 
 words_name_done:
     invoke WriteConsoleA, esi, ADDR space, 1, ADDR bytesWritten, 0
+
+words_next:
     mov ebx, [ebx]
     jmp words_loop
 
@@ -1770,6 +1837,13 @@ print_control_error PROC
     invoke WriteConsoleA, eax, ADDR control_error_msg, control_error_len, ADDR bytesWritten, 0
     ret
 print_control_error ENDP
+
+print_internal_word_error PROC
+    mov error_flag, 1
+    invoke GetStdHandle, -11
+    invoke WriteConsoleA, eax, ADDR internal_word_msg, internal_word_len, ADDR bytesWritten, 0
+    ret
+print_internal_word_error ENDP
 
 print_space PROC
     invoke GetStdHandle, -11

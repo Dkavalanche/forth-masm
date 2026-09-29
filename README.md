@@ -15,6 +15,7 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - Return stack: >r r> r@
    - Validación de underflow y división por cero
    - Validación de estructuras de control durante la compilación
+   - Primitivas internas protegidas: lit, 0branch y branch
    - Utilidades: . .s clear words quit
    - Memoria: constant variable @ !
    - Saltos internos: 0branch branch
@@ -23,8 +24,8 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - Salida anticipada de palabras compiladas: exit
 
  Cambios recientes:
-   - Se valida la correspondencia entre if/else/then y los ciclos
-   - Una definición inválida se descarta sin alterar el diccionario
+   - lit, 0branch y branch ya no aparecen en words
+   - Su ejecución directa o compilación manual informa un error
 
  Notas:
    - Las palabras de control se ejecutan durante la compilación
@@ -34,6 +35,7 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - again crea un ciclo infinito salvo que se use exit
    - clear vacía solamente la pila de datos
    - Una línea con error no imprime OK
+   - Los números dentro de : ... ; generan lit automáticamente
 
  Próxima etapa prevista:
    - Agregar ciclos contados: do loop +loop i
@@ -134,6 +136,23 @@ Salida esperada:
 ```text
 Stack underflow
 Division by zero
+```
+
+### Primitivas internas
+
+`lit`, `0branch` y `branch` son detalles internos del código compilado. No se muestran con `words` ni se escriben directamente en la consola o dentro de `: ... ;`.
+
+Los literales se escriben normalmente:
+
+```forth
+: respuesta 42 ;
+respuesta .
+```
+
+Resultado esperado:
+
+```text
+42
 ```
 
 ### Errores de compilación
