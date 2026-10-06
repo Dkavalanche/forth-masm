@@ -1,7 +1,7 @@
 ; =========================================================
 ; Proyecto: Intérprete Forth para Windows x86 (32 bits) en MASM
 ; Archivo : forth.asm
-; Estado  : versión funcional con ciclos contados
+; Estado  : versión funcional con índices de ciclos anidados
 ;
 ; Incluye:
 ;   - Consola interactiva y parser por tokens
@@ -12,7 +12,7 @@
 ;   - Validación de underflow y división por cero
 ;   - Validación de estructuras de control durante la compilación
 ;   - Primitivas internas protegidas: lit 0branch branch
-;   - Ciclos contados: do loop i
+;   - Ciclos contados: do loop i j k
 ;   - Aritmética: + - * /
 ;   - Comparaciones: = < > 0= 0< 0>
 ;   - Stack: dup drop swap over depth
@@ -24,7 +24,7 @@
 ;   - Salida anticipada de palabras compiladas: exit
 ;
 ; Cambios recientes:
-;   - Agregados do, loop e i para ciclos ascendentes de límite exclusivo
+;   - Agregados j y k para acceder a índices de ciclos exteriores
 ;   - La pila de control valida que loop cierre un do correspondiente
 ;
 ; Notas:
@@ -42,7 +42,7 @@
 ;
 ; Próxima etapa prevista:
 ;   - Agregar palabras de stack: rot nip tuck 2dup 2drop
-;   - Agregar +loop y j para ciclos avanzados
+;   - Agregar +loop para ciclos con incremento variable
 ;   - Agregar comentarios y literales de cadena
 ; =========================================================
 
@@ -102,6 +102,8 @@ do_loop_compile  PROTO
 do_do_runtime    PROTO
 do_loop_runtime  PROTO
 do_i             PROTO
+do_j             PROTO
+do_k             PROTO
 do_exit          PROTO
 do_quit          PROTO
 
@@ -418,8 +420,18 @@ word_i_link dd OFFSET word_loop_link
 word_i_name dd OFFSET name_i
 word_i_code dd OFFSET do_i
 
+name_j      db "j",0
+word_j_link dd OFFSET word_i_link
+word_j_name dd OFFSET name_j
+word_j_code dd OFFSET do_j
+
+name_k      db "k",0
+word_k_link dd OFFSET word_j_link
+word_k_name dd OFFSET name_k
+word_k_code dd OFFSET do_k
+
 name_exit       db "exit",0
-word_exit_link  dd OFFSET word_i_link
+word_exit_link  dd OFFSET word_k_link
 word_exit_name  dd OFFSET name_exit
 word_exit_code  dd OFFSET do_exit
 
@@ -1444,6 +1456,34 @@ do_i_context_error:
     call print_loop_context_error
     ret
 do_i ENDP
+
+; J copies the index of the loop immediately outside the innermost one.
+do_j PROC
+    cmp loop_sp, 2
+    jb do_j_context_error
+    mov ebx, loop_sp
+    sub ebx, 2
+    mov eax, DWORD PTR loop_stack[ebx*8]
+    call push_stack
+    ret
+do_j_context_error:
+    call print_loop_context_error
+    ret
+do_j ENDP
+
+; K copies the index of the third loop from the inside.
+do_k PROC
+    cmp loop_sp, 3
+    jb do_k_context_error
+    mov ebx, loop_sp
+    sub ebx, 3
+    mov eax, DWORD PTR loop_stack[ebx*8]
+    call push_stack
+    ret
+do_k_context_error:
+    call print_loop_context_error
+    ret
+do_k ENDP
 
 ; =========================================================
 ; ARITHMETIC / COMPARISONS / MEMORY

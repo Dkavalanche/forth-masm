@@ -16,7 +16,7 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - Validación de underflow y división por cero
    - Validación de estructuras de control durante la compilación
    - Primitivas internas protegidas: lit, 0branch y branch
-   - Ciclos contados: do loop i
+   - Ciclos contados: do loop i j k
    - Utilidades: . .s clear words quit
    - Memoria: constant variable @ !
    - Saltos internos: 0branch branch
@@ -25,8 +25,8 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - Salida anticipada de palabras compiladas: exit
 
  Cambios recientes:
-   - Se agregaron do, loop e i para ciclos ascendentes
-   - loop sólo puede cerrar un do correspondiente
+   - Se agregaron j y k para índices de loops exteriores
+   - i, j y k requieren uno, dos y tres loops activos, respectivamente
 
  Notas:
    - Las palabras de control se ejecutan durante la compilación
@@ -40,7 +40,7 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - do usa el orden ( límite inicio -- ) y el límite es exclusivo
 
  Próxima etapa prevista:
-   - Agregar ciclos contados: do loop +loop i
+   - Agregar +loop para ciclos con incremento variable
    - Agregar palabras de stack: rot nip tuck 2dup 2drop
 ## Ejemplos
 
@@ -152,6 +152,36 @@ Salida esperada:
 8
 9
 ```
+
+### Ciclos anidados
+
+```forth
+: indices-anidados
+  2 0 do
+    2 0 do
+      i .
+      j .
+    loop
+  loop
+;
+
+indices-anidados
+```
+
+Salida esperada:
+
+```text
+0
+0
+1
+0
+0
+1
+1
+1
+```
+
+`i` corresponde al loop más interno, `j` al siguiente exterior y `k` al tercero. Usar `j` o `k` sin suficientes loops activos muestra `Loop context error`.
 
 ### Errores de ejecución
 
