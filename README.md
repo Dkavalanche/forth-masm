@@ -16,7 +16,7 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - Validación de underflow y división por cero
    - Validación de estructuras de control durante la compilación
    - Primitivas internas protegidas: lit, 0branch y branch
-   - Ciclos contados: do loop i j k
+   - Ciclos contados: do loop +loop i j k
    - Utilidades: . .s clear words quit
    - Memoria: constant variable @ !
    - Saltos internos: 0branch branch
@@ -25,8 +25,8 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - Salida anticipada de palabras compiladas: exit
 
  Cambios recientes:
-   - Se agregaron j y k para índices de loops exteriores
-   - i, j y k requieren uno, dos y tres loops activos, respectivamente
+   - Se agregó +loop con incrementos variables positivos y negativos
+   - Pruebas automáticas de ciclos, errores y regresiones sobre el ejecutable
 
  Notas:
    - Las palabras de control se ejecutan durante la compilación
@@ -37,10 +37,11 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - clear vacía solamente la pila de datos
    - Una línea con error no imprime OK
    - Los números dentro de : ... ; generan lit automáticamente
-   - do usa el orden ( límite inicio -- ) y el límite es exclusivo
+   - do usa el orden ( límite inicio -- )
+   - do ... loop conserva el límite exclusivo y omite el cuerpo si inicio >= límite
+   - do ... +loop entra siempre al cuerpo; termina al cruzar la frontera entre límite-1 y límite
 
  Próxima etapa prevista:
-   - Agregar +loop para ciclos con incremento variable
    - Agregar palabras de stack: rot nip tuck 2dup 2drop
 ## Ejemplos
 
@@ -153,6 +154,42 @@ Salida esperada:
 9
 ```
 
+### Ciclos con incremento variable
+
+`+loop` consume un incremento de la pila en cada iteración: `( incremento -- )`.
+El incremento puede calcularse dentro del cuerpo.
+
+```forth
+: pares 10 0 do i . 2 +loop ;
+pares
+```
+
+Imprime `0 2 4 6 8`, un número por línea. Un paso de `3` imprime `0 3 6 9`:
+no hace falta alcanzar exactamente el límite.
+
+```forth
+: bajar 0 6 do i . -2 +loop ;
+bajar
+```
+
+Imprime `6 4 2 0`. En descenso, alcanzar el límite no termina el ciclo:
+debe cruzarse la frontera hacia `límite-1`, según la semántica de
+[`+LOOP` en Forth](https://forth-standard.org/standard/core/PlusLOOP).
+Los cálculos son circulares de 32 bits y detectan el cruce incluso con desbordamiento.
+
+Por compatibilidad con este proyecto, el compilador distingue ambos cierres:
+`do ... loop` sigue omitiendo el cuerpo cuando `inicio >= límite`, mientras que
+`do ... +loop` entra siempre, incluso si ambos valores son iguales.
+Por eso reemplazar `loop` por `1 +loop` no es equivalente en esos casos.
+
+Un incremento cero repite el mismo índice; un paso que se aleja del límite puede
+dar un ciclo muy largo. Se puede terminar con `exit`, que libera los ciclos de
+la palabra actual. No se agrega `leave` en esta versión.
+
+`+loop` requiere un `do` pendiente y estructuras interiores cerradas. Si falta
+el incremento en ejecución, informa `Stack underflow` y sale de la palabra actual.
+Los runtimes `(do)`, `(loop)`, `(+do)` y `(+loop)` son internos y están protegidos.
+
 ### Ciclos anidados
 
 ```forth
@@ -252,12 +289,32 @@ forth-masm/
 
 ## Compilación
 
-Ejemplo usando `ml.exe` y `link.exe`:
+Desde una consola de herramientas x86 de Visual Studio, usando `ml.exe` y `link.exe`:
 
 ```bat
-ml.exe /c /Cp /coff src\forth.asm
-link /SUBSYSTEM:console /DEFAULTLIB:kernel32.lib forth.obj /ENTRY:main
+if not exist build mkdir build
+ml.exe /c /Cp /coff /Fo build\forth.obj src\forth.asm
+link.exe /SUBSYSTEM:console /DEFAULTLIB:kernel32.lib build\forth.obj /OUT:build\forth.exe
 ```
+
+## Pruebas automáticas
+
+Después de compilar la versión actual como `build\forth.exe`, ejecutar en Windows
+con Python 3 (sin dependencias externas):
+
+```powershell
+python tests/test_cycles.py
+```
+
+También se puede indicar otra ruta al ejecutable como primer argumento.
+El runner abre consolas ocultas, envía comandos al intérprete real y verifica
+la salida con un tiempo máximo por comando. No utiliza redirección de entrada,
+porque el intérprete usa `ReadConsoleA` y `WriteConsoleA`.
+
+Las 36 pruebas cubren pasos positivos, negativos, variables y cero, límites
+iguales, cruces y desbordamientos de 32 bits, anidamiento con `i/j/k`, return stack,
+`exit`, underflow, errores de compilación, rollback del diccionario y regresiones
+de las palabras existentes. Ver [tests/test_cycles.py](tests/test_cycles.py).
 
 ## Licencia
 

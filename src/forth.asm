@@ -1,7 +1,7 @@
 ; =========================================================
 ; Proyecto: Intérprete Forth para Windows x86 (32 bits) en MASM
 ; Archivo : forth.asm
-; Estado  : versión funcional con índices de ciclos anidados
+; Estado  : versión funcional con ciclos de incremento variable
 ;
 ; Incluye:
 ;   - Consola interactiva y parser por tokens
@@ -12,7 +12,7 @@
 ;   - Validación de underflow y división por cero
 ;   - Validación de estructuras de control durante la compilación
 ;   - Primitivas internas protegidas: lit 0branch branch
-;   - Ciclos contados: do loop i j k
+;   - Ciclos contados: do loop +loop i j k
 ;   - Aritmética: + - * /
 ;   - Comparaciones: = < > 0= 0< 0>
 ;   - Stack: dup drop swap over depth
@@ -24,8 +24,8 @@
 ;   - Salida anticipada de palabras compiladas: exit
 ;
 ; Cambios recientes:
-;   - Agregados j y k para acceder a índices de ciclos exteriores
-;   - La pila de control valida que loop cierre un do correspondiente
+;   - +loop consume un incremento y detecta cruces del límite en 32 bits
+;   - do ... +loop admite descensos sin cambiar do ... loop
 ;
 ; Notas:
 ;   - Las palabras de control se ejecutan durante la compilación
@@ -42,7 +42,6 @@
 ;
 ; Próxima etapa prevista:
 ;   - Agregar palabras de stack: rot nip tuck 2dup 2drop
-;   - Agregar +loop para ciclos con incremento variable
 ;   - Agregar comentarios y literales de cadena
 ; =========================================================
 
@@ -99,6 +98,9 @@ do_while         PROTO
 do_repeat        PROTO
 do_do_compile    PROTO
 do_loop_compile  PROTO
+do_plus_loop_compile PROTO
+do_plus_do_runtime PROTO
+do_plus_loop_runtime PROTO
 do_do_runtime    PROTO
 do_loop_runtime  PROTO
 do_i             PROTO
@@ -225,8 +227,18 @@ word_loop_runtime_link dd OFFSET word_do_runtime_link
 word_loop_runtime_name dd OFFSET name_loop_runtime
 word_loop_runtime_code dd OFFSET do_loop_runtime
 
+name_plus_do_runtime db "(+do)",0
+word_plus_do_runtime_link dd OFFSET word_loop_runtime_link
+word_plus_do_runtime_name dd OFFSET name_plus_do_runtime
+word_plus_do_runtime_code dd OFFSET do_plus_do_runtime
+
+name_plus_loop_runtime db "(+loop)",0
+word_plus_loop_runtime_link dd OFFSET word_plus_do_runtime_link
+word_plus_loop_runtime_name dd OFFSET name_plus_loop_runtime
+word_plus_loop_runtime_code dd OFFSET do_plus_loop_runtime
+
 name_plus       db "+",0
-word_plus_link  dd OFFSET word_loop_runtime_link
+word_plus_link  dd OFFSET word_plus_loop_runtime_link
 word_plus_name  dd OFFSET name_plus
 word_plus_code  dd OFFSET do_plus
 
@@ -415,8 +427,13 @@ word_loop_link dd OFFSET word_do_link
 word_loop_name dd OFFSET name_loop
 word_loop_code dd OFFSET do_loop_compile
 
+name_plus_loop db "+loop",0
+word_plus_loop_link dd OFFSET word_loop_link
+word_plus_loop_name dd OFFSET name_plus_loop
+word_plus_loop_code dd OFFSET do_plus_loop_compile
+
 name_i      db "i",0
-word_i_link dd OFFSET word_loop_link
+word_i_link dd OFFSET word_plus_loop_link
 word_i_name dd OFFSET name_i
 word_i_code dd OFFSET do_i
 
@@ -544,6 +561,11 @@ compile_known_word:
     cmp eax, OFFSET word_loop_runtime_link
     je compile_internal_word
 
+    cmp eax, OFFSET word_plus_do_runtime_link
+    je compile_internal_word
+    cmp eax, OFFSET word_plus_loop_runtime_link
+    je compile_internal_word
+
     cmp eax, OFFSET word_semicolon_link
     je compile_exec_word
 
@@ -575,6 +597,9 @@ compile_known_word:
     je compile_exec_word
 
     cmp eax, OFFSET word_loop_link
+    je compile_exec_word
+
+    cmp eax, OFFSET word_plus_loop_link
     je compile_exec_word
 
     cmp eax, OFFSET word_colon_link
@@ -1368,9 +1393,42 @@ do_loop_compile_error:
     ret
 do_loop_compile ENDP
 
+; +LOOP closes DO and selects its unconditional-entry runtime. This keeps
+; the existing ascending-only, zero-trip behavior of DO ... LOOP intact.
+do_plus_loop_compile PROC
+    cmp state, 1
+    jne do_plus_loop_compile_error
+    call pop_compile
+    cmp ecx, CONTROL_DO
+    jne do_plus_loop_compile_error
+    mov edx, eax
+    mov DWORD PTR [edx-4], OFFSET word_plus_do_runtime_link
+    lea ecx, [eax+4]
+    mov eax, OFFSET word_plus_loop_runtime_link
+    call compile_dword
+    mov eax, ecx
+    call compile_dword
+    mov eax, here
+    mov DWORD PTR [edx], eax
+    ret
+do_plus_loop_compile_error:
+    call report_control_error
+    ret
+do_plus_loop_compile ENDP
+
+do_plus_do_runtime PROC
+    mov ecx, 1
+    jmp counted_do_runtime
+do_plus_do_runtime ENDP
+
 ; (do) starts an ascending counted loop. The compiled cell at IP is the
 ; exit target used when start is greater than or equal to limit.
 do_do_runtime PROC
+    xor ecx, ecx
+    jmp counted_do_runtime
+do_do_runtime ENDP
+
+counted_do_runtime PROC
     cmp colon_depth, 1
     jb do_do_runtime_invalid
     cmp dsp, 2
@@ -1379,9 +1437,12 @@ do_do_runtime PROC
     call pop_stack
     mov edx, eax                    ; start
     call pop_stack                   ; EAX = limit
+    test ecx, ecx
+    jnz do_do_runtime_enter
     cmp edx, eax
     jge do_do_runtime_exit_loop
 
+do_do_runtime_enter:
     mov ebx, loop_sp
     mov DWORD PTR loop_stack[ebx*8], edx
     mov DWORD PTR loop_stack[ebx*8+4], eax
@@ -1404,7 +1465,7 @@ do_do_runtime_underflow:
 do_do_runtime_invalid:
     call reject_internal_word
     ret
-do_do_runtime ENDP
+counted_do_runtime ENDP
 
 ; (loop) increments the active loop index and either branches back to the
 ; inline body target or continues after that target cell.
@@ -1442,6 +1503,47 @@ do_loop_runtime_invalid:
     call reject_internal_word
     ret
 do_loop_runtime ENDP
+
+; Runtime ( increment -- ). Bias index-limit by MIN-INT: signed overflow
+; on addition then means crossing the boundary between limit-1 and limit.
+; All arithmetic wraps in 32 bits, including the stored unmodified index.
+do_plus_loop_runtime PROC
+    cmp colon_depth, 1
+    jb do_plus_loop_invalid
+    cmp loop_sp, 1
+    jb do_plus_loop_context_error
+    cmp dsp, 1
+    jb do_plus_loop_underflow
+    call pop_stack
+    mov ecx, eax
+    mov ebx, loop_sp
+    dec ebx
+    mov edx, DWORD PTR loop_stack[ebx*8]
+    mov eax, edx
+    sub eax, DWORD PTR loop_stack[ebx*8+4]
+    add eax, 80000000h
+    add edx, ecx
+    mov DWORD PTR loop_stack[ebx*8], edx
+    add eax, ecx
+    jno do_plus_loop_continue
+    dec loop_sp
+    add ip, 4
+    ret
+do_plus_loop_continue:
+    mov ebx, ip
+    mov eax, DWORD PTR [ebx]
+    mov ip, eax
+    ret
+do_plus_loop_underflow:
+    call print_stack_underflow
+    ret
+do_plus_loop_context_error:
+    call print_loop_context_error
+    ret
+do_plus_loop_invalid:
+    call reject_internal_word
+    ret
+do_plus_loop_runtime ENDP
 
 ; I copies the current innermost loop index to the data stack.
 do_i PROC
@@ -1986,6 +2088,10 @@ words_loop:
     cmp ebx, OFFSET word_do_runtime_link
     je words_next
     cmp ebx, OFFSET word_loop_runtime_link
+    je words_next
+    cmp ebx, OFFSET word_plus_do_runtime_link
+    je words_next
+    cmp ebx, OFFSET word_plus_loop_runtime_link
     je words_next
 
     mov edi, [ebx+4]
