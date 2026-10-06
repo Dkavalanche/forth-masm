@@ -16,6 +16,7 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - Validación de underflow y división por cero
    - Validación de estructuras de control durante la compilación
    - Primitivas internas protegidas: lit, 0branch y branch
+   - Ciclos contados: do loop i
    - Utilidades: . .s clear words quit
    - Memoria: constant variable @ !
    - Saltos internos: 0branch branch
@@ -24,8 +25,8 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - Salida anticipada de palabras compiladas: exit
 
  Cambios recientes:
-   - lit, 0branch y branch ya no aparecen en words
-   - Su ejecución directa o compilación manual informa un error
+   - Se agregaron do, loop e i para ciclos ascendentes
+   - loop sólo puede cerrar un do correspondiente
 
  Notas:
    - Las palabras de control se ejecutan durante la compilación
@@ -36,6 +37,7 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - clear vacía solamente la pila de datos
    - Una línea con error no imprime OK
    - Los números dentro de : ... ; generan lit automáticamente
+   - do usa el orden ( límite inicio -- ) y el límite es exclusivo
 
  Próxima etapa prevista:
    - Agregar ciclos contados: do loop +loop i
@@ -122,6 +124,33 @@ Salida esperada:
 8
 9
 10
+```
+
+### Ciclo contado
+
+```forth
+: contar-con-i
+  10 0 do
+    i .
+  loop
+;
+
+contar-con-i
+```
+
+Salida esperada:
+
+```text
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
 ```
 
 ### Errores de ejecución

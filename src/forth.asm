@@ -1,7 +1,7 @@
 ; =========================================================
 ; Proyecto: Intérprete Forth para Windows x86 (32 bits) en MASM
 ; Archivo : forth.asm
-; Estado  : versión funcional con primitivas internas protegidas
+; Estado  : versión funcional con ciclos contados
 ;
 ; Incluye:
 ;   - Consola interactiva y parser por tokens
@@ -12,6 +12,7 @@
 ;   - Validación de underflow y división por cero
 ;   - Validación de estructuras de control durante la compilación
 ;   - Primitivas internas protegidas: lit 0branch branch
+;   - Ciclos contados: do loop i
 ;   - Aritmética: + - * /
 ;   - Comparaciones: = < > 0= 0< 0>
 ;   - Stack: dup drop swap over depth
@@ -23,8 +24,8 @@
 ;   - Salida anticipada de palabras compiladas: exit
 ;
 ; Cambios recientes:
-;   - Ocultadas lit, 0branch y branch de words
-;   - Rechazada su ejecución directa o compilación manual
+;   - Agregados do, loop e i para ciclos ascendentes de límite exclusivo
+;   - La pila de control valida que loop cierre un do correspondiente
 ;
 ; Notas:
 ;   - Las palabras de control se ejecutan durante la compilación
@@ -37,10 +38,11 @@
 ;   - compile_stack almacena direcciones etiquetadas por tipo de control
 ;   - dict_space se alinea a 4 bytes para separar direcciones y etiquetas
 ;   - colon_depth identifica la ejecución de una definición compilada
+;   - loop_stack mantiene índice y límite sin interferir con >r, r> y r@
 ;
 ; Próxima etapa prevista:
-;   - Agregar ciclos contados: do loop +loop i
 ;   - Agregar palabras de stack: rot nip tuck 2dup 2drop
+;   - Agregar +loop y j para ciclos avanzados
 ;   - Agregar comentarios y literales de cadena
 ; =========================================================
 
@@ -95,6 +97,11 @@ do_until         PROTO
 do_again         PROTO
 do_while         PROTO
 do_repeat        PROTO
+do_do_compile    PROTO
+do_loop_compile  PROTO
+do_do_runtime    PROTO
+do_loop_runtime  PROTO
+do_i             PROTO
 do_exit          PROTO
 do_quit          PROTO
 
@@ -133,6 +140,9 @@ division_zero_len equ ($ - division_zero_msg)
 control_error_msg db "Control structure error",13,10,0
 control_error_len equ ($ - control_error_msg)
 
+loop_context_msg db "Loop context error",13,10,0
+loop_context_len equ ($ - loop_context_msg)
+
 internal_word_msg db "Internal word",13,10,0
 internal_word_len equ ($ - internal_word_msg)
 
@@ -169,14 +179,18 @@ colon_depth     dd 0
 exit_target     dd 0
 
 compile_stack   dd 128 dup(0)
+compile_type_stack dd 128 dup(0)
 compile_sp      dd 0
 
 CONTROL_IF      equ 1
 CONTROL_ELSE    equ 2
 CONTROL_BEGIN   equ 3
-CONTROL_WHILE   equ 0
-CONTROL_MASK    equ 3
-CONTROL_ADDR_MASK equ 0FFFFFFFCh
+CONTROL_WHILE   equ 4
+CONTROL_DO      equ 5
+
+loop_stack      dd 256 dup(0)
+loop_sp         dd 0
+loop_base_stack dd 128 dup(0)
 
 ; =========================================================
 ; STATIC DICTIONARY
@@ -199,8 +213,18 @@ word_branch_link dd OFFSET word_0branch_link
 word_branch_name dd OFFSET name_branch
 word_branch_code dd OFFSET do_branch
 
+name_do_runtime      db "(do)",0
+word_do_runtime_link dd OFFSET word_branch_link
+word_do_runtime_name dd OFFSET name_do_runtime
+word_do_runtime_code dd OFFSET do_do_runtime
+
+name_loop_runtime      db "(loop)",0
+word_loop_runtime_link dd OFFSET word_do_runtime_link
+word_loop_runtime_name dd OFFSET name_loop_runtime
+word_loop_runtime_code dd OFFSET do_loop_runtime
+
 name_plus       db "+",0
-word_plus_link  dd OFFSET word_branch_link
+word_plus_link  dd OFFSET word_loop_runtime_link
 word_plus_name  dd OFFSET name_plus
 word_plus_code  dd OFFSET do_plus
 
@@ -379,8 +403,23 @@ word_repeat_link dd OFFSET word_while_link
 word_repeat_name dd OFFSET name_repeat
 word_repeat_code dd OFFSET do_repeat
 
+name_do      db "do",0
+word_do_link dd OFFSET word_repeat_link
+word_do_name dd OFFSET name_do
+word_do_code dd OFFSET do_do_compile
+
+name_loop      db "loop",0
+word_loop_link dd OFFSET word_do_link
+word_loop_name dd OFFSET name_loop
+word_loop_code dd OFFSET do_loop_compile
+
+name_i      db "i",0
+word_i_link dd OFFSET word_loop_link
+word_i_name dd OFFSET name_i
+word_i_code dd OFFSET do_i
+
 name_exit       db "exit",0
-word_exit_link  dd OFFSET word_repeat_link
+word_exit_link  dd OFFSET word_i_link
 word_exit_name  dd OFFSET name_exit
 word_exit_code  dd OFFSET do_exit
 
@@ -487,6 +526,12 @@ compile_known_word:
     cmp eax, OFFSET word_branch_link
     je compile_internal_word
 
+    cmp eax, OFFSET word_do_runtime_link
+    je compile_internal_word
+
+    cmp eax, OFFSET word_loop_runtime_link
+    je compile_internal_word
+
     cmp eax, OFFSET word_semicolon_link
     je compile_exec_word
 
@@ -512,6 +557,12 @@ compile_known_word:
     je compile_exec_word
 
     cmp eax, OFFSET word_repeat_link
+    je compile_exec_word
+
+    cmp eax, OFFSET word_do_link
+    je compile_exec_word
+
+    cmp eax, OFFSET word_loop_link
     je compile_exec_word
 
     cmp eax, OFFSET word_colon_link
@@ -763,6 +814,7 @@ compile_dword ENDP
 push_compile PROC
     mov ebx, compile_sp
     mov DWORD PTR compile_stack[ebx*4], eax
+    mov DWORD PTR compile_type_stack[ebx*4], ecx
     inc compile_sp
     ret
 push_compile ENDP
@@ -773,10 +825,12 @@ pop_compile PROC
     dec compile_sp
     mov ebx, compile_sp
     mov eax, DWORD PTR compile_stack[ebx*4]
+    mov ecx, DWORD PTR compile_type_stack[ebx*4]
     ret
 
 pop_compile_empty:
     xor eax, eax
+    xor ecx, ecx
     ret
 pop_compile ENDP
 
@@ -1003,6 +1057,9 @@ do_colon PROC
     push esi
     push ip
 
+    mov ebx, colon_depth
+    mov eax, loop_sp
+    mov DWORD PTR loop_base_stack[ebx*4], eax
     inc colon_depth
 
     lea ebx, [edi+12]
@@ -1024,6 +1081,9 @@ dc_loop:
 
 dc_done:
     dec colon_depth
+    mov ebx, colon_depth
+    mov eax, DWORD PTR loop_base_stack[ebx*4]
+    mov loop_sp, eax
     pop ip
     pop esi
     pop ebx
@@ -1046,7 +1106,7 @@ do_if PROC
     call compile_dword
 
     mov eax, here
-    or eax, CONTROL_IF
+    mov ecx, CONTROL_IF
     call push_compile
 
     xor eax, eax
@@ -1064,18 +1124,15 @@ do_else PROC
     jne do_else_error
 
     call pop_compile
-    mov edx, eax
-    and edx, CONTROL_MASK
-    cmp edx, CONTROL_IF
+    cmp ecx, CONTROL_IF
     jne do_else_error
-    and eax, CONTROL_ADDR_MASK
     mov edx, eax
 
     mov eax, OFFSET word_branch_link
     call compile_dword
 
     mov eax, here
-    or eax, CONTROL_ELSE
+    mov ecx, CONTROL_ELSE
     call push_compile
 
     xor eax, eax
@@ -1096,16 +1153,12 @@ do_then PROC
     jne do_then_error
 
     call pop_compile
-    mov edx, eax
-    and edx, CONTROL_MASK
-    cmp edx, CONTROL_IF
+    cmp ecx, CONTROL_IF
     je do_then_patch
-    cmp edx, CONTROL_ELSE
+    cmp ecx, CONTROL_ELSE
     jne do_then_error
 
 do_then_patch:
-    and eax, CONTROL_ADDR_MASK
-
     mov edx, here
     mov DWORD PTR [eax], edx
 
@@ -1122,7 +1175,7 @@ do_begin PROC
     jne do_begin_error
 
     mov eax, here
-    or eax, CONTROL_BEGIN
+    mov ecx, CONTROL_BEGIN
     call push_compile
 
 do_begin_exit:
@@ -1140,11 +1193,8 @@ do_until PROC
     jne do_until_error
 
     call pop_compile
-    mov edx, eax
-    and edx, CONTROL_MASK
-    cmp edx, CONTROL_BEGIN
+    cmp ecx, CONTROL_BEGIN
     jne do_until_error
-    and eax, CONTROL_ADDR_MASK
     mov edx, eax
 
     mov eax, OFFSET word_0branch_link
@@ -1166,11 +1216,8 @@ do_again PROC
     jne do_again_error
 
     call pop_compile
-    mov edx, eax
-    and edx, CONTROL_MASK
-    cmp edx, CONTROL_BEGIN
+    cmp ecx, CONTROL_BEGIN
     jne do_again_error
-    and eax, CONTROL_ADDR_MASK
     mov edx, eax
 
     mov eax, OFFSET word_branch_link
@@ -1198,8 +1245,7 @@ do_while PROC
     jb do_while_error
     mov ebx, compile_sp
     dec ebx
-    mov eax, DWORD PTR compile_stack[ebx*4]
-    and eax, CONTROL_MASK
+    mov eax, DWORD PTR compile_type_stack[ebx*4]
     cmp eax, CONTROL_BEGIN
     jne do_while_error
 
@@ -1209,7 +1255,7 @@ do_while PROC
     call compile_dword
 
     mov eax, here
-    or eax, CONTROL_WHILE
+    mov ecx, CONTROL_WHILE
     call push_compile
 
     xor eax, eax
@@ -1231,20 +1277,14 @@ do_repeat PROC
 
     ; Top item is WHILE's exit placeholder.
     call pop_compile
-    mov edx, eax
-    and edx, CONTROL_MASK
-    cmp edx, CONTROL_WHILE
+    cmp ecx, CONTROL_WHILE
     jne do_repeat_error
-    and eax, CONTROL_ADDR_MASK
     mov edx, eax
 
     ; Next item is BEGIN's backward target.
     call pop_compile
-    mov ecx, eax
-    and ecx, CONTROL_MASK
     cmp ecx, CONTROL_BEGIN
     jne do_repeat_error
-    and eax, CONTROL_ADDR_MASK
     mov ecx, eax
 
     mov eax, OFFSET word_branch_link
@@ -1263,6 +1303,147 @@ do_repeat_error:
     call report_control_error
     ret
 do_repeat ENDP
+
+; DO compiles the counted-loop runtime and a pending exit target.
+; Runtime stack effect: ( limit start -- )
+do_do_compile PROC
+    cmp state, 1
+    jne do_do_compile_error
+
+    mov eax, OFFSET word_do_runtime_link
+    call compile_dword
+
+    mov eax, here
+    mov ecx, CONTROL_DO
+    call push_compile
+
+    xor eax, eax
+    call compile_dword
+
+do_do_compile_exit:
+    ret
+do_do_compile_error:
+    call report_control_error
+    ret
+do_do_compile ENDP
+
+; LOOP closes a matching DO. It compiles the backward target and patches
+; DO's pending exit target to the first cell after LOOP.
+do_loop_compile PROC
+    cmp state, 1
+    jne do_loop_compile_error
+
+    call pop_compile
+    cmp ecx, CONTROL_DO
+    jne do_loop_compile_error
+    mov edx, eax                    ; DO exit-target placeholder
+    add eax, 4                      ; first instruction in the loop body
+    mov ecx, eax
+
+    mov eax, OFFSET word_loop_runtime_link
+    call compile_dword
+
+    mov eax, ecx
+    call compile_dword
+
+    mov eax, here
+    mov DWORD PTR [edx], eax
+
+do_loop_compile_exit:
+    ret
+do_loop_compile_error:
+    call report_control_error
+    ret
+do_loop_compile ENDP
+
+; (do) starts an ascending counted loop. The compiled cell at IP is the
+; exit target used when start is greater than or equal to limit.
+do_do_runtime PROC
+    cmp colon_depth, 1
+    jb do_do_runtime_invalid
+    cmp dsp, 2
+    jb do_do_runtime_underflow
+
+    call pop_stack
+    mov edx, eax                    ; start
+    call pop_stack                   ; EAX = limit
+    cmp edx, eax
+    jge do_do_runtime_exit_loop
+
+    mov ebx, loop_sp
+    mov DWORD PTR loop_stack[ebx*8], edx
+    mov DWORD PTR loop_stack[ebx*8+4], eax
+    inc loop_sp
+
+    mov ebx, ip
+    add ebx, 4                      ; skip the inline exit target
+    mov ip, ebx
+    ret
+
+do_do_runtime_exit_loop:
+    mov ebx, ip
+    mov eax, DWORD PTR [ebx]
+    mov ip, eax
+    ret
+
+do_do_runtime_underflow:
+    call print_stack_underflow
+    ret
+do_do_runtime_invalid:
+    call reject_internal_word
+    ret
+do_do_runtime ENDP
+
+; (loop) increments the active loop index and either branches back to the
+; inline body target or continues after that target cell.
+do_loop_runtime PROC
+    cmp colon_depth, 1
+    jb do_loop_runtime_invalid
+    cmp loop_sp, 1
+    jb do_loop_runtime_context_error
+
+    mov ebx, loop_sp
+    dec ebx
+    mov edx, DWORD PTR loop_stack[ebx*8]
+    inc edx
+    mov DWORD PTR loop_stack[ebx*8], edx
+    mov eax, DWORD PTR loop_stack[ebx*8+4]
+    cmp edx, eax
+    jl do_loop_runtime_continue
+
+    dec loop_sp
+    mov ebx, ip
+    add ebx, 4
+    mov ip, ebx
+    ret
+
+do_loop_runtime_continue:
+    mov ebx, ip
+    mov eax, DWORD PTR [ebx]
+    mov ip, eax
+    ret
+
+do_loop_runtime_context_error:
+    call print_loop_context_error
+    ret
+do_loop_runtime_invalid:
+    call reject_internal_word
+    ret
+do_loop_runtime ENDP
+
+; I copies the current innermost loop index to the data stack.
+do_i PROC
+    cmp loop_sp, 1
+    jb do_i_context_error
+    mov ebx, loop_sp
+    dec ebx
+    mov eax, DWORD PTR loop_stack[ebx*8]
+    call push_stack
+    ret
+do_i_context_error:
+    call print_loop_context_error
+    ret
+do_i ENDP
 
 ; =========================================================
 ; ARITHMETIC / COMPARISONS / MEMORY
@@ -1762,6 +1943,10 @@ words_loop:
     je words_next
     cmp ebx, OFFSET word_branch_link
     je words_next
+    cmp ebx, OFFSET word_do_runtime_link
+    je words_next
+    cmp ebx, OFFSET word_loop_runtime_link
+    je words_next
 
     mov edi, [ebx+4]
 
@@ -1837,6 +2022,14 @@ print_control_error PROC
     invoke WriteConsoleA, eax, ADDR control_error_msg, control_error_len, ADDR bytesWritten, 0
     ret
 print_control_error ENDP
+
+print_loop_context_error PROC
+    mov error_flag, 1
+    invoke GetStdHandle, -11
+    invoke WriteConsoleA, eax, ADDR loop_context_msg, loop_context_len, ADDR bytesWritten, 0
+    call do_exit
+    ret
+print_loop_context_error ENDP
 
 print_internal_word_error PROC
     mov error_flag, 1
