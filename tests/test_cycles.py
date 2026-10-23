@@ -138,6 +138,18 @@ CASES = [
     ("conditionals", [": t dup 0< if -1 * else 1 + then ; -5 t . 5 t ."], "5 6 OK >>"),
     ("begin loops", [": t 0 begin 1 + dup 3 = until ; : w 0 begin dup 3 < while 1 + repeat ; t . w ."], "3 3 OK >>"),
     ("again exit", [": t 0 begin 1 + dup 3 = if exit then again ; t ."], "3 OK >>"),
+    ("rot preserves prefix", ["99 1 2 3 rot .s"], "[ 99 2 3 1 ] OK >>"),
+    ("rot compiled", [": rotate rot ; -1 0 7 rotate .s"], "[ 0 7 -1 ] OK >>"),
+    ("nip prefix", ["99 1 2 nip .s"], "[ 99 2 ] OK >>"),
+    ("tuck prefix", ["99 1 2 tuck .s"], "[ 99 2 1 2 ] OK >>"),
+    ("2dup prefix", ["99 -1 7 2dup .s"], "[ 99 -1 7 -1 7 ] OK >>"),
+    ("2drop prefix", ["99 1 2 2drop .s"], "[ 99 ] OK >>"),
+    ("stack words compiled", [": t 2dup 2drop tuck nip ; 1 2 t .s"], "[ 2 2 ] OK >>"),
+    ("nip underflow", ["nip", "1 nip", ".s"], "Stack underflow >> Stack underflow >> [ 1 ] OK >>"),
+    ("tuck underflow", ["tuck", "1 tuck", ".s"], "Stack underflow >> Stack underflow >> [ 1 ] OK >>"),
+    ("2dup underflow", ["2dup", "1 2dup", ".s"], "Stack underflow >> Stack underflow >> [ 1 ] OK >>"),
+    ("2drop underflow", ["2drop", "1 2drop", ".s"], "Stack underflow >> Stack underflow >> [ 1 ] OK >>"),
+    ("rot underflow", ["rot", "1 rot", "2 rot", ".s"], "Stack underflow >> Stack underflow >> Stack underflow >> [ 1 2 ] OK >>"),
 ]
 
 

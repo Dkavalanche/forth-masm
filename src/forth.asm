@@ -15,7 +15,7 @@
 ;   - Ciclos contados: do loop +loop i j k
 ;   - Aritmética: + - * /
 ;   - Comparaciones: = < > 0= 0< 0>
-;   - Stack: dup drop swap over depth
+;   - Stack: dup drop swap over rot nip tuck 2dup 2drop depth
 ;   - Utilidades: . .s clear words quit
 ;   - Memoria: constant variable @ !
 ;   - Saltos internos: 0branch branch
@@ -24,8 +24,8 @@
 ;   - Salida anticipada de palabras compiladas: exit
 ;
 ; Cambios recientes:
-;   - +loop consume un incremento y detecta cruces del límite en 32 bits
-;   - do ... +loop admite descensos sin cambiar do ... loop
+;   - Agregada rot: ( a b c -- b c a ), con validación de underflow
+;   - Agregadas nip, tuck, 2dup y 2drop con validación de underflow
 ;
 ; Notas:
 ;   - Las palabras de control se ejecutan durante la compilación
@@ -41,7 +41,7 @@
 ;   - loop_stack mantiene índice y límite sin interferir con >r, r> y r@
 ;
 ; Próxima etapa prevista:
-;   - Agregar palabras de stack: rot nip tuck 2dup 2drop
+;   - Validar límites de capacidad de las pilas
 ;   - Agregar comentarios y literales de cadena
 ; =========================================================
 
@@ -80,6 +80,11 @@ do_drop          PROTO
 do_dot_s         PROTO
 do_swap          PROTO
 do_over          PROTO
+do_rot           PROTO
+do_nip           PROTO
+do_tuck          PROTO
+do_two_dup       PROTO
+do_two_drop      PROTO
 do_to_r          PROTO
 do_r_from        PROTO
 do_r_fetch       PROTO
@@ -342,8 +347,33 @@ word_over_link  dd OFFSET word_swap_link
 word_over_name  dd OFFSET name_over
 word_over_code  dd OFFSET do_over
 
+name_rot        db "rot",0
+word_rot_link   dd OFFSET word_over_link
+word_rot_name   dd OFFSET name_rot
+word_rot_code   dd OFFSET do_rot
+
+name_nip        db "nip",0
+word_nip_link   dd OFFSET word_rot_link
+word_nip_name   dd OFFSET name_nip
+word_nip_code   dd OFFSET do_nip
+
+name_tuck       db "tuck",0
+word_tuck_link  dd OFFSET word_nip_link
+word_tuck_name  dd OFFSET name_tuck
+word_tuck_code  dd OFFSET do_tuck
+
+name_two_dup       db "2dup",0
+word_two_dup_link  dd OFFSET word_tuck_link
+word_two_dup_name  dd OFFSET name_two_dup
+word_two_dup_code  dd OFFSET do_two_dup
+
+name_two_drop       db "2drop",0
+word_two_drop_link  dd OFFSET word_two_dup_link
+word_two_drop_name  dd OFFSET name_two_drop
+word_two_drop_code  dd OFFSET do_two_drop
+
 name_to_r       db ">r",0
-word_to_r_link  dd OFFSET word_over_link
+word_to_r_link  dd OFFSET word_two_drop_link
 word_to_r_name  dd OFFSET name_to_r
 word_to_r_code  dd OFFSET do_to_r
 
@@ -2012,6 +2042,84 @@ do_over_underflow:
     call print_stack_underflow
     ret
 do_over ENDP
+
+; Rotate the top three cells: ( a b c -- b c a ).
+do_rot PROC
+    cmp dsp, 3
+    jb do_rot_underflow
+    mov ebx, dsp
+    sub ebx, 3
+    mov eax, DWORD PTR stack[ebx*4]
+    mov edx, DWORD PTR stack[ebx*4+4]
+    mov DWORD PTR stack[ebx*4], edx
+    mov edx, DWORD PTR stack[ebx*4+8]
+    mov DWORD PTR stack[ebx*4+4], edx
+    mov DWORD PTR stack[ebx*4+8], eax
+    ret
+do_rot_underflow:
+    call print_stack_underflow
+    ret
+do_rot ENDP
+
+; ( a b -- b )
+do_nip PROC
+    cmp dsp, 2
+    jb do_nip_underflow
+    mov ebx, dsp
+    sub ebx, 2
+    mov eax, DWORD PTR stack[ebx*4+4]
+    mov DWORD PTR stack[ebx*4], eax
+    dec dsp
+    ret
+do_nip_underflow:
+    call print_stack_underflow
+    ret
+do_nip ENDP
+
+; ( a b -- b a b )
+do_tuck PROC
+    cmp dsp, 2
+    jb do_tuck_underflow
+    mov ebx, dsp
+    sub ebx, 2
+    mov eax, DWORD PTR stack[ebx*4]
+    mov edx, DWORD PTR stack[ebx*4+4]
+    mov DWORD PTR stack[ebx*4], edx
+    mov DWORD PTR stack[ebx*4+4], eax
+    mov DWORD PTR stack[ebx*4+8], edx
+    inc dsp
+    ret
+do_tuck_underflow:
+    call print_stack_underflow
+    ret
+do_tuck ENDP
+
+; ( a b -- a b a b )
+do_two_dup PROC
+    cmp dsp, 2
+    jb do_two_dup_underflow
+    mov ebx, dsp
+    mov eax, DWORD PTR stack[ebx*4-8]
+    mov edx, DWORD PTR stack[ebx*4-4]
+    mov DWORD PTR stack[ebx*4], eax
+    mov DWORD PTR stack[ebx*4+4], edx
+    add dsp, 2
+    ret
+do_two_dup_underflow:
+    call print_stack_underflow
+    ret
+do_two_dup ENDP
+
+; ( a b -- )
+do_two_drop PROC
+    cmp dsp, 2
+    jb do_two_drop_underflow
+    sub dsp, 2
+    ret
+do_two_drop_underflow:
+    call print_stack_underflow
+    ret
+do_two_drop ENDP
 
 ; >r moves the top data-stack value to the return stack.
 ; Stack effect: ( x -- ) ( R: -- x )

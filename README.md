@@ -11,7 +11,7 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - Stack de datos y literales compilados mediante lit
    - Aritmética: + - * /
    - Comparaciones: = < > 0= 0< 0>
-   - Stack: dup drop swap over depth
+   - Stack: dup drop swap over rot nip tuck 2dup 2drop depth
    - Return stack: >r r> r@
    - Validación de underflow y división por cero
    - Validación de estructuras de control durante la compilación
@@ -42,7 +42,7 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - do ... +loop entra siempre al cuerpo; termina al cruzar la frontera entre límite-1 y límite
 
  Próxima etapa prevista:
-   - Agregar palabras de stack: rot nip tuck 2dup 2drop
+   - Validar límites de capacidad de las pilas
 ## Ejemplos
 
 ### Aritmética básica
@@ -81,6 +81,33 @@ Resultado esperado:
 ```text
 [ 1 2 3 ]
 ```
+
+### Rotación de tres valores
+
+```forth
+1 2 3 rot .s
+```
+
+Resultado esperado: `[ 2 3 1 ]`. `rot` transforma `( a b c -- b c a )`;
+requiere tres valores y conserva la pila si informa `Stack underflow`.
+
+### Más operaciones de pila
+
+| Palabra | Efecto |
+|---|---|
+| `nip` | `( a b -- b )` |
+| `tuck` | `( a b -- b a b )` |
+| `2dup` | `( a b -- a b a b )` |
+| `2drop` | `( a b -- )` |
+
+Todas requieren al menos dos valores. Si faltan, informan `Stack underflow`
+y conservan el contenido existente.
+
+```forth
+clear 10 20 2dup < . .s
+```
+
+Imprime `-1` y luego `[ 10 20 ]`.
 
 ### Return stack
 
