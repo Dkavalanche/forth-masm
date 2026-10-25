@@ -1,7 +1,9 @@
 ; =========================================================
 ; Proyecto: Intérprete Forth para Windows x86 (32 bits) en MASM
 ; Archivo : forth.asm
-; Estado  : versión funcional con ciclos de incremento variable
+; Actualizacion: comentarios Forth ( ... ) y barra inversa.
+; Se omiten al interpretar y al compilar; parentesis permite varias lineas.
+; Estado  : versión funcional con comentarios Forth
 ;
 ; Incluye:
 ;   - Consola interactiva y parser por tokens
@@ -24,8 +26,8 @@
 ;   - Salida anticipada de palabras compiladas: exit
 ;
 ; Cambios recientes:
-;   - Agregada rot: ( a b c -- b c a ), con validación de underflow
-;   - Agregadas nip, tuck, 2dup y 2drop con validación de underflow
+;   - Agregados comentarios de línea y con paréntesis
+;   - Comentarios con paréntesis admiten varias líneas sin anidamiento
 ;
 ; Notas:
 ;   - Las palabras de control se ejecutan durante la compilación
@@ -41,8 +43,8 @@
 ;   - loop_stack mantiene índice y límite sin interferir con >r, r> y r@
 ;
 ; Próxima etapa prevista:
-;   - Validar límites de capacidad de las pilas
-;   - Agregar comentarios y literales de cadena
+;   - Cargar y ejecutar archivos con forth.exe -f codigo.f
+;   - Informar errores con archivo y número de línea
 ; =========================================================
 
 .386
@@ -174,6 +176,7 @@ numBuffer       db 16 dup(0)
 
 state           dd 0
 error_flag      dd 0
+paren_comment   dd 0
 ALIGN 4
 dict_space      dd 4096 dup(0)
 here            dd OFFSET dict_space
@@ -513,6 +516,8 @@ main ENDP
 ; =========================================================
 interpret PROC
     mov esi, OFFSET buffer
+    cmp paren_comment, 0
+    jne scan_paren_comment
 
 next_token:
 skip_spaces:
@@ -529,6 +534,46 @@ check_end:
     je interpret_done
     cmp byte ptr [esi], 0
     je interpret_done
+
+    ; Comment markers must be complete tokens, like other Forth words.
+    mov al, [esi]
+    cmp al, '('
+    je check_comment_marker
+    cmp al, 92
+    jne dispatch_token
+check_comment_marker:
+    mov dl, [esi+1]
+    cmp dl, ' '
+    je start_comment
+    cmp dl, 13
+    je start_comment
+    cmp dl, 10
+    je start_comment
+    cmp dl, 0
+    jne dispatch_token
+start_comment:
+    cmp al, 92
+    je interpret_done
+    mov paren_comment, 1
+    inc esi
+scan_paren_comment:
+    mov al, [esi]
+    cmp al, ')'
+    je end_paren_comment
+    cmp al, 13
+    je interpret_done
+    cmp al, 10
+    je interpret_done
+    cmp al, 0
+    je interpret_done
+    inc esi
+    jmp scan_paren_comment
+end_paren_comment:
+    mov paren_comment, 0
+    inc esi
+    jmp next_token
+
+dispatch_token:
 
     cmp state, 0
     je interpret_mode

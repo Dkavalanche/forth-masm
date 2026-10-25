@@ -103,6 +103,11 @@ def run(exe, lines):
 
 
 CASES = [
+    ("line comment", ["10 20 + . \\ unknown 999 .", ".s"], "30 OK >> [ ] OK >>"),
+    ("paren comment", ["1 ( unknown ; if 999 ) 2 + ."], "3 OK >>"),
+    ("compiled comments", [": t ( n -- n*2 ) dup + \\ ignored ;", ";", "5 t ."], "OK >> OK >> 10 OK >>"),
+    ("multiline comment", [": t 1 ( ignored", "999 ; if", ") 2 + ;", "t ."], "OK >> OK >> OK >> 3 OK >>"),
+    ("comment only", ["\\ unknown", "( )", ".s"], "OK >> OK >> [ ] OK >>"),
     ("ascending", [": t 10 0 do i 2 +loop ; t .s"], "[ 0 2 4 6 8 ] OK >>"),
     ("overshoot", [": t 10 0 do i 3 +loop ; t .s"], "[ 0 3 6 9 ] OK >>"),
     ("descending exact", [": t 0 6 do i -2 +loop ; t .s"], "[ 6 4 2 0 ] OK >>"),

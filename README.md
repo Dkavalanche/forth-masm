@@ -42,8 +42,22 @@ Proyecto de un intérprete **Forth** para **Windows x86 de 32 bits**, desarrolla
    - do ... +loop entra siempre al cuerpo; termina al cruzar la frontera entre límite-1 y límite
 
  Próxima etapa prevista:
-   - Validar límites de capacidad de las pilas
+   - Cargar y ejecutar archivos con `forth.exe -f codigo.f`
+   - Conservar el fuente y sus comentarios en archivos; `see` queda fuera del plan por ahora
 ## Ejemplos
+
+### Comentarios
+
+```forth
+10 20 + .  \ imprime 30
+: doble ( n -- doble ) dup + ;
+5 doble .
+```
+
+`\` ignora el resto de la línea. `(` ignora hasta el primer `)` y puede
+continuar en otras líneas. No se anidan. Los marcadores de apertura deben
+estar separados del texto por un espacio o fin de línea. Funcionan tanto
+al interpretar como al compilar, sin modificar la pila.
 
 ### Aritmética básica
 

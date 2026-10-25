@@ -28,9 +28,16 @@
 - Pruebas automáticas de ciclos y regresiones sobre la consola Win32
 
 ## Próximo bloque
+- Carga y ejecución de archivos: `forth.exe -f codigo.f`
+- Procesar líneas conservando el estado de compilación y los comentarios multilínea
+- Informar errores con archivo y número de línea
+
+## Completado recientemente
 - Palabras de pila: `rot nip tuck 2dup 2drop`
+- Comentarios `( ... )` y `\` hasta fin de línea
 
 ## Más adelante
-- Comentarios y literales de cadena
+- Literales de cadena
+- Validar límites de capacidad de las pilas
 - memoria más completa
 - port a x64
